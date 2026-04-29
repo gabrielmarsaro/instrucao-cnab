@@ -340,20 +340,26 @@ with aba_clientes:
 
         # --- ABA: EXCLUSÃO EM LOTE ---
         with aba_excluir_lote:
-            st.write("Selecione os clientes que deseja apagar ou marque a caixa para selecionar todos.")
+            st.write("Selecione os clientes que deseja apagar marcando as caixas abaixo.")
 
             marcar_todos = st.checkbox("☑️ Selecionar TODOS os clientes")
 
-            if marcar_todos:
-                clientes_para_excluir = st.multiselect("Clientes selecionados:", opcoes_clientes, default=opcoes_clientes)
-            else:
-                clientes_para_excluir = st.multiselect("Clientes selecionados:", opcoes_clientes)
+            # Cria uma caixa com barra de rolagem para a lista não ficar infinita
+            container_lista = st.container(height=400)
+
+            clientes_para_excluir = []
+
+            with container_lista:
+                for cliente_texto in opcoes_clientes:
+                    # Se "marcar_todos" for True, todas as caixinhas já nascem marcadas
+                    if st.checkbox(cliente_texto, value=marcar_todos, key=f"chk_{cliente_texto}"):
+                        clientes_para_excluir.append(cliente_texto)
 
             if clientes_para_excluir:
                 st.warning(f"⚠️ Você está prestes a excluir **{len(clientes_para_excluir)}** cliente(s). Essa ação não pode ser desfeita.")
                 if st.button("🚨 Confirmar Exclusão em Lote", type="primary"):
                     try:
-                        # Pega os IDs reais direto do dicionário (sem chance de erro de texto)
+                        # Pega os IDs reais direto do dicionário
                         ids_excluir = [mapa_clientes[c] for c in clientes_para_excluir]
 
                         # Deleta um por um usando o ID interno
@@ -364,49 +370,6 @@ with aba_clientes:
                         st.rerun()
                     except Exception as e:
                         st.error(f"Erro ao excluir em lote: {e}")
-    else:
-        st.info("Nenhum cliente cadastrado ainda.")
-        
-# --- ABA: MEUS CONVÊNIOS ---
-with aba_convenios:
-    st.header("Gestão de Convênios")
-
-    with st.expander("➕ Cadastrar Novo Convênio"):
-        with st.form("form_novo_convenio"):
-            col1, col2 = st.columns(2)
-            conv_cnpj = col1.text_input("CNPJ da Empresa (Apenas números)")
-            conv_razao = col2.text_input("Razão Social da Empresa")
-
-            col3, col4, col5, col6 = st.columns(4)
-            conv_ag = col3.text_input("Agência (Sem DV)")
-            conv_ag_dv = col4.text_input("DV Agência")
-            conv_conta = col5.text_input("Conta (Sem DV)")
-            conv_conta_dv = col6.text_input("DV Conta")
-
-            col7, col8, col9 = st.columns(3)
-            conv_num = col7.text_input("Número do Convênio (7 dígitos)")
-            conv_cart = col8.text_input("Carteira (Ex: 17)")
-            conv_var = col9.text_input("Variação (Ex: 019)")
-
-            if st.form_submit_button("Salvar Convênio"):
-                novo_convenio = {
-                    "user_id": st.session_state.user.id,
-                    "cnpj": conv_cnpj,
-                    "razao_social": conv_razao,
-                    "agencia": conv_ag,
-                    "dv_agencia": conv_ag_dv,
-                    "conta": conv_conta,
-                    "dv_conta": conv_conta_dv,
-                    "convenio": conv_num,
-                    "carteira": conv_cart,
-                    "variacao": conv_var
-                }
-                try:
-                    supabase.table("convenios").insert(novo_convenio).execute()
-                    st.success("Convênio cadastrado com sucesso!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Erro ao salvar: {e}")
 
     st.write("### Convênios Cadastrados")
     resposta_conv = supabase.table("convenios").select("*").eq("user_id", st.session_state.user.id).execute()
