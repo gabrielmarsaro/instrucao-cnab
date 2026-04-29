@@ -273,6 +273,24 @@ if st.session_state.user:
 
             if st.button("🚀 GERAR ARQUIVO REMESSA FINAL", type="primary"):
                 try:
+                    # 1. Define quais lotes processar (Carrinho ou Geração Imediata)
+                    lotes_para_processar = list(st.session_state.lotes)
+
+                    if not lotes_para_processar:
+                        if arquivo_excel is not None:
+                            # Geração imediata: pega o arquivo que está na tela
+                            df_imediato = pd.read_excel(arquivo_excel)
+                            lotes_para_processar.append({
+                                'df': df_imediato,
+                                'instrucao': instrucao,
+                                'nova_data': nova_data,
+                                'nome_arquivo': arquivo_excel.name
+                            })
+                        else:
+                            st.warning("⚠️ Adicione um lote ao carrinho ou selecione uma planilha para gerar a remessa.")
+                            st.stop() # Para a execução aqui se não tiver nada
+
+                    # 2. Inicia a geração do arquivo
                     dados_bancarios = df_convenios[df_convenios['razao_social'] == convenio_selecionado].iloc[0].to_dict()
                     nsa = 1 
 
@@ -284,60 +302,57 @@ if st.session_state.user:
 
                     total_registros_arquivo = 0
 
-                    if st.session_state.lotes:
-                        for i, lote in enumerate(st.session_state.lotes):
-                            numero_lote = i + 1
-                            linhas.append(header_lote(dados_bancarios, numero_lote, nsa))
+                    # 3. Processa os lotes
+                    for i, lote in enumerate(lotes_para_processar):
+                        numero_lote = i + 1
+                        linhas.append(header_lote(dados_bancarios, numero_lote, nsa))
 
-                            df_boletos = lote['df']
-                            cod_instrucao = lote['instrucao'].split(" - ")[0].strip()
+                        df_boletos = lote['df']
+                        cod_instrucao = lote['instrucao'].split(" - ")[0].strip()
 
-                            # MENSAGEM DE DEBUG NA TELA
-                            st.info(f"🔍 Lote {numero_lote}: Encontrei {len(df_boletos)} linhas na planilha.")
+                        colunas_bol_lower = [str(c).strip().lower() for c in df_boletos.columns]
+                        df_boletos.columns = colunas_bol_lower
+                        colunas_map = {
+                            'nn': next((c for c in colunas_bol_lower if 'nosso numero' in c or 'nosso_numero' in c), 'nosso numero'),
+                            'doc': next((c for c in colunas_bol_lower if 'documento' in c), 'nº documento'),
+                            'venc': next((c for c in colunas_bol_lower if 'vencimento' in c), 'vencimento líquido'),
+                            'valor': next((c for c in colunas_bol_lower if 'corrigido' in c or 'novo valor' in c), 'total corrigido'),
+                            'montante': next((c for c in colunas_bol_lower if 'montante' in c), 'montante'),
+                            'cliente': next((c for c in colunas_bol_lower if 'cliente' in c or 'nome' in c), 'cliente')
+                        }
 
-                            colunas_bol_lower = [str(c).strip().lower() for c in df_boletos.columns]
-                            df_boletos.columns = colunas_bol_lower
-                            colunas_map = {
-                                'nn': next((c for c in colunas_bol_lower if 'nosso numero' in c or 'nosso_numero' in c), 'nosso numero'),
-                                'doc': next((c for c in colunas_bol_lower if 'documento' in c), 'nº documento'),
-                                'venc': next((c for c in colunas_bol_lower if 'vencimento' in c), 'vencimento líquido'),
-                                'valor': next((c for c in colunas_bol_lower if 'corrigido' in c or 'novo valor' in c), 'total corrigido'),
-                                'montante': next((c for c in colunas_bol_lower if 'montante' in c), 'montante'),
-                                'cliente': next((c for c in colunas_bol_lower if 'cliente' in c or 'nome' in c), 'cliente')
-                            }
+                        seq_reg = 1
+                        for index, row in df_boletos.iterrows():
+                            dados_linha = row.to_dict()
+                            nome_coluna_codigo = colunas_map.get('cliente')
 
-                            seq_reg = 1
-                            for index, row in df_boletos.iterrows():
-                                dados_linha = row.to_dict()
-                                nome_coluna_codigo = colunas_map.get('cliente')
+                            if not df_clientes_bd.empty and nome_coluna_codigo in dados_linha:
+                                cod_boleto = str(dados_linha[nome_coluna_codigo]).strip().replace(".0", "")
+                                cli_match = df_clientes_bd[df_clientes_bd['id_cliente_planilha'] == cod_boleto]
 
-                                if not df_clientes_bd.empty and nome_coluna_codigo in dados_linha:
-                                    cod_boleto = str(dados_linha[nome_coluna_codigo]).strip().replace(".0", "")
-                                    cli_match = df_clientes_bd[df_clientes_bd['id_cliente_planilha'] == cod_boleto]
+                                if not cli_match.empty:
+                                    cli_dados = cli_match.iloc[0]
+                                    dados_linha['cnpj_cpf'] = cli_dados.get('cnpj_cpf', '')
+                                    dados_linha['nome'] = cli_dados.get('nome', '')
+                                    dados_linha['endereco'] = cli_dados.get('endereco', '')
+                                    dados_linha['bairro'] = cli_dados.get('bairro', '')
+                                    dados_linha['cep'] = cli_dados.get('cep', '')
+                                    dados_linha['cidade'] = cli_dados.get('cidade', '')
+                                    dados_linha['uf'] = cli_dados.get('uf', '')
+                                else:
+                                    st.warning(f"⚠️ Cliente com código '{cod_boleto}' não encontrado no banco.")
 
-                                    if not cli_match.empty:
-                                        cli_dados = cli_match.iloc[0]
-                                        dados_linha['cnpj_cpf'] = cli_dados.get('cnpj_cpf', '')
-                                        dados_linha['nome'] = cli_dados.get('nome', '')
-                                        dados_linha['endereco'] = cli_dados.get('endereco', '')
-                                        dados_linha['bairro'] = cli_dados.get('bairro', '')
-                                        dados_linha['cep'] = cli_dados.get('cep', '')
-                                        dados_linha['cidade'] = cli_dados.get('cidade', '')
-                                        dados_linha['uf'] = cli_dados.get('uf', '')
-                                    else:
-                                        st.warning(f"⚠️ Cliente com código '{cod_boleto}' não encontrado no banco.")
+                            linhas.append(segmento_p(dados_linha, numero_lote, seq_reg, dados_bancarios, colunas_map, cod_instrucao, lote['nova_data']))
+                            seq_reg += 1
+                            linhas.append(segmento_q(dados_linha, numero_lote, seq_reg, colunas_map, cod_instrucao))
+                            seq_reg += 1
 
-                                # GARANTIA DE INDENTAÇÃO: Estas linhas criam o P e Q independente de achar o cliente
-                                linhas.append(segmento_p(dados_linha, numero_lote, seq_reg, dados_bancarios, colunas_map, cod_instrucao, lote['nova_data']))
-                                seq_reg += 1
-                                linhas.append(segmento_q(dados_linha, numero_lote, seq_reg, colunas_map, cod_instrucao))
-                                seq_reg += 1
+                        linhas.append(trailer_lote(numero_lote, seq_reg + 1))
+                        total_registros_arquivo += (seq_reg + 1)
 
-                            linhas.append(trailer_lote(numero_lote, seq_reg + 1))
-                            total_registros_arquivo += (seq_reg + 1)
+                    linhas.append(trailer_arquivo(len(lotes_para_processar), total_registros_arquivo + 2))
 
-                    linhas.append(trailer_arquivo(len(st.session_state.lotes), total_registros_arquivo + 2))
-
+                    # 4. Finaliza e limpa o texto
                     cnab_bytes = io.BytesIO()
                     for linha in linhas:
                         linha_limpa = ''.join(c for c in unicodedata.normalize('NFD', linha) if unicodedata.category(c) != 'Mn')
@@ -345,7 +360,7 @@ if st.session_state.user:
                         bytes_linha = linha_final.encode('ascii', errors='replace').replace(b'?', b' ')
                         cnab_bytes.write(bytes_linha)
 
-                    st.success(f"✅ Arquivo gerado com {len(linhas)} linhas no total!")
+                    st.success(f"✅ Arquivo gerado com sucesso! ({len(linhas)} linhas)")
                     st.download_button(
                         label="📥 Baixar Arquivo CNAB",
                         data=cnab_bytes.getvalue(),
@@ -353,11 +368,11 @@ if st.session_state.user:
                         mime="text/plain"
                     )
 
+                    # Limpa o carrinho após gerar com sucesso
                     st.session_state.lotes = []
 
                 except Exception as e:
-                    st.error(f"Erro ao gerar arquivo: {e}")
-    # --- ABA: MEUS CLIENTES ---
+                    st.error(f"Erro ao gerar arquivo: {e}")    # --- ABA: MEUS CLIENTES ---
     with aba_clientes:
         st.header("Gestão de Clientes")
 
