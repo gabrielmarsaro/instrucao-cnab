@@ -157,6 +157,7 @@ if st.session_state.user:
                 "46 - Exclusão de Negativação sem protesto",
                 "47 - Alteração do Valor Nominal do Boleto"
             ])
+
             nova_data = None
             if instrucao == "06 - Alteração de Vencimento":
                 nova_data = col2.date_input("Nova Data de Vencimento", format="DD/MM/YYYY")
