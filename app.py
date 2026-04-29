@@ -193,22 +193,95 @@ aba_gerador, aba_clientes, aba_convenios = st.tabs(["Gerar Remessa", "Meus Clien
 # --- ABA: MEUS CLIENTES ---
 with aba_clientes:
     st.header("Gestão de Clientes")
-    st.write("Em breve: Edição direta na tabela sincronizada com a nuvem.")
+
+    with st.expander("➕ Cadastrar Novo Cliente"):
+        with st.form("form_novo_cliente"):
+            col1, col2 = st.columns(2)
+            cli_cnpj_cpf = col1.text_input("CNPJ/CPF (Apenas números)")
+            cli_nome = col2.text_input("Nome / Razão Social")
+
+            col3, col4 = st.columns(2)
+            cli_end = col3.text_input("Endereço")
+            cli_bairro = col4.text_input("Bairro")
+
+            col5, col6, col7 = st.columns([2, 3, 1])
+            cli_cep = col5.text_input("CEP (Apenas números)")
+            cli_cidade = col6.text_input("Cidade")
+            cli_uf = col7.text_input("UF")
+
+            if st.form_submit_button("Salvar Cliente"):
+                novo_cliente = {
+                    "user_id": st.session_state.user.id,
+                    "cnpj_cpf": cli_cnpj_cpf,
+                    "nome": cli_nome,
+                    "endereco": cli_end,
+                    "bairro": cli_bairro,
+                    "cep": cli_cep,
+                    "cidade": cli_cidade,
+                    "uf": cli_uf
+                }
+                try:
+                    supabase.table("clientes").insert(novo_cliente).execute()
+                    st.success("Cliente cadastrado com sucesso!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao salvar: {e}")
+
+    st.write("### Clientes Cadastrados")
     resposta_cli = supabase.table("clientes").select("*").eq("user_id", st.session_state.user.id).execute()
     df_clientes = pd.DataFrame(resposta_cli.data)
     if not df_clientes.empty:
-        st.dataframe(df_clientes.drop(columns=['id', 'user_id', 'created_at']))
+        # Mostra a tabela sem as colunas de controle do sistema
+        st.dataframe(df_clientes.drop(columns=['id', 'user_id', 'created_at', 'id_cliente_planilha']), use_container_width=True)
     else:
         st.info("Nenhum cliente cadastrado ainda.")
 
 # --- ABA: MEUS CONVÊNIOS ---
 with aba_convenios:
     st.header("Gestão de Convênios")
-    st.write("Em breve: Cadastro e edição de convênios.")
+
+    with st.expander("➕ Cadastrar Novo Convênio"):
+        with st.form("form_novo_convenio"):
+            col1, col2 = st.columns(2)
+            conv_cnpj = col1.text_input("CNPJ da Empresa (Apenas números)")
+            conv_razao = col2.text_input("Razão Social da Empresa")
+
+            col3, col4, col5, col6 = st.columns(4)
+            conv_ag = col3.text_input("Agência (Sem DV)")
+            conv_ag_dv = col4.text_input("DV Agência")
+            conv_conta = col5.text_input("Conta (Sem DV)")
+            conv_conta_dv = col6.text_input("DV Conta")
+
+            col7, col8, col9 = st.columns(3)
+            conv_num = col7.text_input("Número do Convênio (7 dígitos)")
+            conv_cart = col8.text_input("Carteira (Ex: 17)")
+            conv_var = col9.text_input("Variação (Ex: 019)")
+
+            if st.form_submit_button("Salvar Convênio"):
+                novo_convenio = {
+                    "user_id": st.session_state.user.id,
+                    "cnpj": conv_cnpj,
+                    "razao_social": conv_razao,
+                    "agencia": conv_ag,
+                    "dv_agencia": conv_ag_dv,
+                    "conta": conv_conta,
+                    "dv_conta": conv_conta_dv,
+                    "convenio": conv_num,
+                    "carteira": conv_cart,
+                    "variacao": conv_var
+                }
+                try:
+                    supabase.table("convenios").insert(novo_convenio).execute()
+                    st.success("Convênio cadastrado com sucesso!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao salvar: {e}")
+
+    st.write("### Convênios Cadastrados")
     resposta_conv = supabase.table("convenios").select("*").eq("user_id", st.session_state.user.id).execute()
     df_convenios = pd.DataFrame(resposta_conv.data)
     if not df_convenios.empty:
-        st.dataframe(df_convenios.drop(columns=['id', 'user_id', 'created_at']))
+        st.dataframe(df_convenios.drop(columns=['id', 'user_id', 'created_at']), use_container_width=True)
     else:
         st.info("Nenhum convênio cadastrado ainda.")
 
