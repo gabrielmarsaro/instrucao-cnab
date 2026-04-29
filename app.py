@@ -272,62 +272,96 @@ with aba_clientes:
         # Mostra a tabela geral
         st.dataframe(df_clientes.drop(columns=['id', 'user_id', 'created_at']), use_container_width=True)
 
-        st.write("### ✏️ Editar ou Excluir Cliente")
-        # Cria uma lista para o selectbox no formato "Nome (Cód: 123)"
+        # Cria abas para organizar a edição e a exclusão em lote
+        aba_editar, aba_excluir_lote = st.tabs(["✏️ Editar Cliente", "🗑️ Exclusão em Lote"])
+
         opcoes_clientes = df_clientes.apply(lambda row: f"{row['nome']} (Cód: {row['id_cliente_planilha']})", axis=1).tolist()
-        cliente_selecionado = st.selectbox("Selecione o cliente que deseja alterar:", [""] + opcoes_clientes)
 
-        if cliente_selecionado:
-            # Descobre qual é o ID interno do cliente selecionado
-            cod_selecionado = cliente_selecionado.split("(Cód: ")[1].replace(")", "")
-            dados_cli = df_clientes[df_clientes['id_cliente_planilha'] == cod_selecionado].iloc[0]
+        # --- ABA: EDITAR CLIENTE ---
+        with aba_editar:
+            cliente_selecionado = st.selectbox("Selecione o cliente que deseja alterar:", [""] + opcoes_clientes)
 
-            with st.form("form_editar_cliente"):
-                col1, col2 = st.columns(2)
-                edit_cod = col1.text_input("Código (Cliente)", value=dados_cli.get('id_cliente_planilha', ''))
-                edit_cnpj = col2.text_input("CNPJ/CPF", value=dados_cli.get('cnpj_cpf', ''))
+            if cliente_selecionado:
+                cod_selecionado = cliente_selecionado.split("(Cód: ")[1].replace(")", "")
 
-                edit_nome = st.text_input("Nome / Razão Social", value=dados_cli.get('nome', ''))
-                edit_end = st.text_input("Endereço", value=dados_cli.get('endereco', ''))
+                # CORREÇÃO DO ERRO: Força a coluna a ser texto antes de comparar
+                cli_filtrado = df_clientes[df_clientes['id_cliente_planilha'].astype(str) == cod_selecionado]
 
-                col3, col4, col5, col6 = st.columns(4)
-                edit_bairro = col3.text_input("Bairro", value=dados_cli.get('bairro', ''))
-                edit_cep = col4.text_input("CEP", value=dados_cli.get('cep', ''))
-                edit_cidade = col5.text_input("Cidade", value=dados_cli.get('cidade', ''))
-                edit_uf = col6.text_input("UF", value=dados_cli.get('uf', ''))
+                if not cli_filtrado.empty:
+                    dados_cli = cli_filtrado.iloc[0]
 
-                col_salvar, col_excluir = st.columns(2)
-                with col_salvar:
-                    btn_salvar = st.form_submit_button("💾 Salvar Alterações", type="primary")
-                with col_excluir:
-                    btn_excluir = st.form_submit_button("🗑️ Excluir Cliente")
+                    with st.form("form_editar_cliente"):
+                        col1, col2 = st.columns(2)
+                        edit_cod = col1.text_input("Código (Cliente)", value=str(dados_cli.get('id_cliente_planilha', '')))
+                        edit_cnpj = col2.text_input("CNPJ/CPF", value=str(dados_cli.get('cnpj_cpf', '')))
 
-                if btn_salvar:
+                        edit_nome = st.text_input("Nome / Razão Social", value=str(dados_cli.get('nome', '')))
+                        edit_end = st.text_input("Endereço", value=str(dados_cli.get('endereco', '')))
+
+                        col3, col4, col5, col6 = st.columns(4)
+                        edit_bairro = col3.text_input("Bairro", value=str(dados_cli.get('bairro', '')))
+                        edit_cep = col4.text_input("CEP", value=str(dados_cli.get('cep', '')))
+                        edit_cidade = col5.text_input("Cidade", value=str(dados_cli.get('cidade', '')))
+                        edit_uf = col6.text_input("UF", value=str(dados_cli.get('uf', '')))
+
+                        col_salvar, col_excluir = st.columns(2)
+                        with col_salvar:
+                            btn_salvar = st.form_submit_button("💾 Salvar Alterações", type="primary")
+                        with col_excluir:
+                            btn_excluir = st.form_submit_button("🗑️ Excluir Este Cliente")
+
+                        if btn_salvar:
+                            try:
+                                supabase.table("clientes").update({
+                                    "id_cliente_planilha": edit_cod,
+                                    "cnpj_cpf": edit_cnpj,
+                                    "nome": edit_nome,
+                                    "endereco": edit_end,
+                                    "bairro": edit_bairro,
+                                    "cep": edit_cep,
+                                    "cidade": edit_cidade,
+                                    "uf": edit_uf
+                                }).eq("id", dados_cli['id']).execute()
+                                st.success("Cliente atualizado com sucesso!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erro ao atualizar: {e}")
+
+                        if btn_excluir:
+                            try:
+                                supabase.table("clientes").delete().eq("id", dados_cli['id']).execute()
+                                st.success("Cliente excluído com sucesso!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erro ao excluir: {e}")
+
+        # --- ABA: EXCLUSÃO EM LOTE ---
+        with aba_excluir_lote:
+            st.write("Selecione os clientes que deseja apagar ou marque a caixa para selecionar todos.")
+
+            marcar_todos = st.checkbox("☑️ Selecionar TODOS os clientes")
+
+            if marcar_todos:
+                clientes_para_excluir = st.multiselect("Clientes selecionados:", opcoes_clientes, default=opcoes_clientes)
+            else:
+                clientes_para_excluir = st.multiselect("Clientes selecionados:", opcoes_clientes)
+
+            if clientes_para_excluir:
+                st.warning(f"⚠️ Você está prestes a excluir **{len(clientes_para_excluir)}** cliente(s). Essa ação não pode ser desfeita.")
+                if st.button("🚨 Confirmar Exclusão em Lote", type="primary"):
                     try:
-                        supabase.table("clientes").update({
-                            "id_cliente_planilha": edit_cod,
-                            "cnpj_cpf": edit_cnpj,
-                            "nome": edit_nome,
-                            "endereco": edit_end,
-                            "bairro": edit_bairro,
-                            "cep": edit_cep,
-                            "cidade": edit_cidade,
-                            "uf": edit_uf
-                        }).eq("id", dados_cli['id']).execute()
-                        st.success("Cliente atualizado com sucesso!")
+                        # Extrai apenas os códigos dos clientes selecionados
+                        codigos_excluir = [c.split("(Cód: ")[1].replace(")", "") for c in clientes_para_excluir]
+
+                        # Deleta todos de uma vez no Supabase usando a função .in_()
+                        supabase.table("clientes").delete().in_("id_cliente_planilha", codigos_excluir).eq("user_id", st.session_state.user.id).execute()
+
+                        st.success(f"{len(codigos_excluir)} clientes excluídos com sucesso!")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Erro ao atualizar: {e}")
-
-                if btn_excluir:
-                    try:
-                        supabase.table("clientes").delete().eq("id", dados_cli['id']).execute()
-                        st.success("Cliente excluído com sucesso!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Erro ao excluir: {e}")
+                        st.error(f"Erro ao excluir em lote: {e}")
     else:
-        st.info("Nenhum cliente cadastrado ainda.")
+        st.info("Nenhum cliente cadastrado ainda.") 
         
 # --- ABA: MEUS CONVÊNIOS ---
 with aba_convenios:
