@@ -228,23 +228,24 @@ with aba_clientes:
 
     with col_planilha:
         with st.expander("📂 Importar via Planilha (Excel)"):
-            st.write("A planilha deve conter as colunas: **codigo, cnpj_cpf, nome, endereco, bairro, cep, cidade, uf**")
+            st.write("A planilha deve conter as colunas: **cliente, cnpj, nome, endereco, bairro, cep, cidade, uf**")
             arquivo_importacao = st.file_uploader("Selecione a planilha de clientes", type=["xlsx", "xls"])
 
             if arquivo_importacao and st.button("Processar Importação"):
                 try:
                     df_import = pd.read_excel(arquivo_importacao)
+                    # Padroniza colunas para minúsculo
                     df_import.columns = [str(c).strip().lower() for c in df_import.columns]
 
                     clientes_para_inserir = []
                     for index, row in df_import.iterrows():
-                        # Pega a coluna 'codigo' ou 'id' da planilha
-                        cod_planilha = str(row.get("codigo", row.get("id", ""))).strip().replace(".0", "")
+                        # Pega a coluna 'cliente' (que é o código 3000025 da sua imagem)
+                        cod_planilha = str(row.get("cliente", "")).strip().replace(".0", "")
 
                         clientes_para_inserir.append({
                             "user_id": st.session_state.user.id,
-                            "id_cliente_planilha": cod_planilha, # <-- AGORA SALVA O CÓDIGO!
-                            "cnpj_cpf": str(row.get("cnpj_cpf", "")).replace(".0", ""),
+                            "id_cliente_planilha": cod_planilha,
+                            "cnpj_cpf": str(row.get("cnpj", "")).replace(".0", ""), # Puxa da coluna 'cnpj'
                             "nome": str(row.get("nome", "")),
                             "endereco": str(row.get("endereco", "")),
                             "bairro": str(row.get("bairro", "")),
@@ -396,13 +397,15 @@ with aba_gerador:
                     seq_reg = 1
                     for index, row in df_boletos.iterrows():
                         dados_linha = row.to_dict()
+                    seq_reg = 1
+                    for index, row in df_boletos.iterrows():
+                        dados_linha = row.to_dict()
 
                         # 2. CRUZAR DADOS PELO CÓDIGO DO CLIENTE
-                        # Tenta achar a coluna de código na planilha de boletos (ex: 'cliente', 'codigo', 'id')
-                        nome_coluna_codigo = next((c for c in colunas_bol_lower if 'código' in c or 'codigo' in c or 'cliente' in c), None)
+                        nome_coluna_codigo = colunas_map.get('cliente')
 
-                        if not df_clientes_bd.empty and nome_coluna_codigo and nome_coluna_codigo in dados_linha:
-                            # Pega o código que veio na planilha de boletos
+                        if not df_clientes_bd.empty and nome_coluna_codigo in dados_linha:
+                            # Pega o código (ex: 3000025) que veio na planilha de boletos
                             cod_boleto = str(dados_linha[nome_coluna_codigo]).strip().replace(".0", "")
 
                             # Procura esse código exato no banco de dados
@@ -410,6 +413,7 @@ with aba_gerador:
 
                             if not cli_match.empty:
                                 cli_dados = cli_match.iloc[0]
+                                # Injeta os dados do banco na linha do CNAB
                                 dados_linha['cnpj_cpf'] = cli_dados.get('cnpj_cpf', '')
                                 dados_linha['nome'] = cli_dados.get('nome', '')
                                 dados_linha['endereco'] = cli_dados.get('endereco', '')
