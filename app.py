@@ -292,6 +292,9 @@ if st.session_state.user:
                             df_boletos = lote['df']
                             cod_instrucao = lote['instrucao'].split(" - ")[0].strip()
 
+                            # MENSAGEM DE DEBUG NA TELA
+                            st.info(f"🔍 Lote {numero_lote}: Encontrei {len(df_boletos)} linhas na planilha.")
+
                             colunas_bol_lower = [str(c).strip().lower() for c in df_boletos.columns]
                             df_boletos.columns = colunas_bol_lower
                             colunas_map = {
@@ -322,8 +325,9 @@ if st.session_state.user:
                                         dados_linha['cidade'] = cli_dados.get('cidade', '')
                                         dados_linha['uf'] = cli_dados.get('uf', '')
                                     else:
-                                        st.warning(f"⚠️ Cliente com código '{cod_boleto}' não encontrado no banco. CNPJ ficará zerado.")
+                                        st.warning(f"⚠️ Cliente com código '{cod_boleto}' não encontrado no banco.")
 
+                                # GARANTIA DE INDENTAÇÃO: Estas linhas criam o P e Q independente de achar o cliente
                                 linhas.append(segmento_p(dados_linha, numero_lote, seq_reg, dados_bancarios, colunas_map, cod_instrucao, lote['nova_data']))
                                 seq_reg += 1
                                 linhas.append(segmento_q(dados_linha, numero_lote, seq_reg, colunas_map, cod_instrucao))
@@ -341,7 +345,7 @@ if st.session_state.user:
                         bytes_linha = linha_final.encode('ascii', errors='replace').replace(b'?', b' ')
                         cnab_bytes.write(bytes_linha)
 
-                    st.success("Arquivo gerado com sucesso!")
+                    st.success(f"✅ Arquivo gerado com {len(linhas)} linhas no total!")
                     st.download_button(
                         label="📥 Baixar Arquivo CNAB",
                         data=cnab_bytes.getvalue(),
@@ -353,7 +357,6 @@ if st.session_state.user:
 
                 except Exception as e:
                     st.error(f"Erro ao gerar arquivo: {e}")
-
     # --- ABA: MEUS CLIENTES ---
     with aba_clientes:
         st.header("Gestão de Clientes")
