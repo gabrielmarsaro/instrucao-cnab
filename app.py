@@ -75,11 +75,13 @@ if not st.session_state.user:
 
             if st.button("Entrar", type="primary", use_container_width=True):
                 try:
-                    resposta = supabase.auth.signInWithPassword({"email": email_login, "password": senha_login})
+                    # CORREÇÃO: Comando correto do Python (sign_in_with_password)
+                    resposta = supabase.auth.sign_in_with_password({"email": email_login, "password": senha_login})
                     st.session_state.user = resposta.user
                     st.rerun()
                 except Exception as e:
-                    st.error("E-mail ou senha incorretos.")
+                    # Agora ele vai mostrar o erro real se você errar a senha
+                    st.error(f"Erro ao logar: {e}")
 
         with aba_cadastro:
             st.subheader("Novo Usuário")
@@ -88,7 +90,8 @@ if not st.session_state.user:
 
             if st.button("Cadastrar", type="primary", use_container_width=True):
                 try:
-                    resposta = supabase.auth.signUp({"email": email_cad, "password": senha_cad})
+                    # CORREÇÃO: Comando correto do Python (sign_up)
+                    resposta = supabase.auth.sign_up({"email": email_cad, "password": senha_cad})
                     st.success("Conta criada com sucesso! Volte na aba 'Entrar' para fazer o login.")
                 except Exception as e:
                     st.error(f"Erro ao criar conta: {e}")
