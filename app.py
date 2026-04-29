@@ -351,12 +351,13 @@ with aba_gerador:
             st.warning("Anexe a planilha e certifique-se de ter um convênio cadastrado.")
 
     # Mostrar Lotes e Gerar
+        # Mostrar Lotes e Gerar
     if st.session_state.lotes:
         st.write("### Carrinho de Lotes")
         for i, lote in enumerate(st.session_state.lotes):
             st.write(f"**Lote {i+1}:** {lote['instrucao']} - Arquivo: {lote['nome_arquivo']} ({len(lote['df'])} boletos)")
 
-                if st.button("🚀 GERAR ARQUIVO REMESSA FINAL", type="primary"):
+        if st.button("🚀 GERAR ARQUIVO REMESSA FINAL", type="primary"):
             try:
                 # Pega os dados do convênio selecionado
                 dados_bancarios = df_convenios[df_convenios['razao_social'] == convenio_selecionado].iloc[0].to_dict()
