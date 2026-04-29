@@ -226,7 +226,7 @@ with aba_clientes:
                     except Exception as e:
                         st.error(f"Erro ao salvar: {e}")
 
-        with col_planilha:
+    with col_planilha:
         with st.expander("📂 Importar via Planilha (Excel)"):
             st.write("A planilha deve conter as colunas: **codigo, cnpj_cpf, nome, endereco, bairro, cep, cidade, uf**")
             arquivo_importacao = st.file_uploader("Selecione a planilha de clientes", type=["xlsx", "xls"])
