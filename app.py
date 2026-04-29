@@ -143,14 +143,14 @@ def segmento_q(row, lote, seq, colunas_map, cod_instrucao):
 # --- Funções de Autenticação ---
 def login(email, password):
     try:
-        res = supabase.auth.signInWithPassword({"email": email, "password": password})
+        res = supabase.auth.sign_in_with_password,({"email": email, "password": password})
         st.session_state.user = res.user
         st.success("Login realizado com sucesso!")
         st.rerun()
     except Exception as e:
         st.error("Erro no login. Verifique suas credenciais.")
 
-def signup(email, password):
+def sign_up(email, password):
     try:
         res = supabase.auth.signUp({"email": email, "password": password})
         st.success("Conta criada! Você já pode fazer login.")
