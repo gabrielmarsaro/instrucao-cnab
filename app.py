@@ -263,10 +263,69 @@ with aba_clientes:
 
     st.divider()
     st.write("### Clientes Cadastrados")
+
+    # Busca os clientes no banco
     resposta_cli = supabase.table("clientes").select("*").eq("user_id", st.session_state.user.id).execute()
     df_clientes = pd.DataFrame(resposta_cli.data)
+
     if not df_clientes.empty:
-        st.dataframe(df_clientes.drop(columns=['id', 'user_id', 'created_at', 'id_cliente_planilha']), use_container_width=True)
+        # Mostra a tabela geral
+        st.dataframe(df_clientes.drop(columns=['id', 'user_id', 'created_at']), use_container_width=True)
+
+        st.write("### ✏️ Editar ou Excluir Cliente")
+        # Cria uma lista para o selectbox no formato "Nome (Cód: 123)"
+        opcoes_clientes = df_clientes.apply(lambda row: f"{row['nome']} (Cód: {row['id_cliente_planilha']})", axis=1).tolist()
+        cliente_selecionado = st.selectbox("Selecione o cliente que deseja alterar:", [""] + opcoes_clientes)
+
+        if cliente_selecionado:
+            # Descobre qual é o ID interno do cliente selecionado
+            cod_selecionado = cliente_selecionado.split("(Cód: ")[1].replace(")", "")
+            dados_cli = df_clientes[df_clientes['id_cliente_planilha'] == cod_selecionado].iloc[0]
+
+            with st.form("form_editar_cliente"):
+                col1, col2 = st.columns(2)
+                edit_cod = col1.text_input("Código (Cliente)", value=dados_cli.get('id_cliente_planilha', ''))
+                edit_cnpj = col2.text_input("CNPJ/CPF", value=dados_cli.get('cnpj_cpf', ''))
+
+                edit_nome = st.text_input("Nome / Razão Social", value=dados_cli.get('nome', ''))
+                edit_end = st.text_input("Endereço", value=dados_cli.get('endereco', ''))
+
+                col3, col4, col5, col6 = st.columns(4)
+                edit_bairro = col3.text_input("Bairro", value=dados_cli.get('bairro', ''))
+                edit_cep = col4.text_input("CEP", value=dados_cli.get('cep', ''))
+                edit_cidade = col5.text_input("Cidade", value=dados_cli.get('cidade', ''))
+                edit_uf = col6.text_input("UF", value=dados_cli.get('uf', ''))
+
+                col_salvar, col_excluir = st.columns(2)
+                with col_salvar:
+                    btn_salvar = st.form_submit_button("💾 Salvar Alterações", type="primary")
+                with col_excluir:
+                    btn_excluir = st.form_submit_button("🗑️ Excluir Cliente")
+
+                if btn_salvar:
+                    try:
+                        supabase.table("clientes").update({
+                            "id_cliente_planilha": edit_cod,
+                            "cnpj_cpf": edit_cnpj,
+                            "nome": edit_nome,
+                            "endereco": edit_end,
+                            "bairro": edit_bairro,
+                            "cep": edit_cep,
+                            "cidade": edit_cidade,
+                            "uf": edit_uf
+                        }).eq("id", dados_cli['id']).execute()
+                        st.success("Cliente atualizado com sucesso!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao atualizar: {e}")
+
+                if btn_excluir:
+                    try:
+                        supabase.table("clientes").delete().eq("id", dados_cli['id']).execute()
+                        st.success("Cliente excluído com sucesso!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao excluir: {e}")
     else:
         st.info("Nenhum cliente cadastrado ainda.")
         
