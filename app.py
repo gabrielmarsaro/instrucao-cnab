@@ -393,19 +393,26 @@ with aba_gerador:
                     }
 
                     seq_reg = 1
+                                        seq_reg = 1
                     for index, row in df_boletos.iterrows():
                         dados_linha = row.to_dict()
 
                         # 2. CRUZAR DADOS DA PLANILHA COM O BANCO DE DADOS
-                        if not df_clientes_bd.empty and colunas_map['cliente'] in dados_linha:
-                            nome_planilha = str(dados_linha[colunas_map['cliente']]).strip().upper()
+                        nome_coluna_planilha = colunas_map.get('cliente')
 
-                            # Procura o cliente no banco pelo nome (ignorando maiúsculas/minúsculas)
-                            cli_match = df_clientes_bd[df_clientes_bd['nome'].str.upper() == nome_planilha]
+                        if not df_clientes_bd.empty and nome_coluna_planilha in dados_linha:
+                            # Limpa o nome da planilha (tira espaços extras e deixa maiúsculo)
+                            nome_planilha = str(dados_linha[nome_coluna_planilha]).strip().upper()
+
+                            # Limpa os nomes do banco para comparar da mesma forma
+                            nomes_banco = df_clientes_bd['nome'].astype(str).str.strip().str.upper()
+
+                            # Tenta achar correspondência
+                            cli_match = df_clientes_bd[nomes_banco == nome_planilha]
 
                             if not cli_match.empty:
                                 cli_dados = cli_match.iloc[0]
-                                # Preenche os dados faltantes com o que está no banco
+                                # Injeta os dados do banco na linha que vai pro CNAB
                                 dados_linha['cnpj_cpf'] = cli_dados.get('cnpj_cpf', '')
                                 dados_linha['nome'] = cli_dados.get('nome', '')
                                 dados_linha['endereco'] = cli_dados.get('endereco', '')
@@ -413,6 +420,9 @@ with aba_gerador:
                                 dados_linha['cep'] = cli_dados.get('cep', '')
                                 dados_linha['cidade'] = cli_dados.get('cidade', '')
                                 dados_linha['uf'] = cli_dados.get('uf', '')
+                            else:
+                                # AVISO: Mostra na tela quem ele não achou
+                                st.warning(f"⚠️ Cliente '{nome_planilha}' da planilha não foi encontrado no banco de dados. O CNPJ ficará zerado.")
 
                         # Gera as linhas do CNAB com os dados completos
                         linhas.append(segmento_p(dados_linha, numero_lote, seq_reg, dados_bancarios, colunas_map, cod_instrucao, lote['nova_data']))
