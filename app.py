@@ -32,37 +32,42 @@ if 'user' not in st.session_state:
 if 'lotes' not in st.session_state:
     st.session_state.lotes = []
 # ==========================================
-# FUNÇÕES AUXILIARES DE FORMATAÇÃO
+# FUNÇÕES AUXILIARES DE FORMATAÇÃO (BLINDADAS)
 # ==========================================
 def fmt_num(valor, tamanho):
-    """Formata números com zeros à esquerda"""
-    tamanho = int(tamanho) # <--- CORREÇÃO: Força a ser número
-    v = str(valor).replace(".0", "").strip()
-    if v.lower() == 'nan' or v == 'None': v = ""
-    v = ''.join(filter(str.isdigit, v))
-    return v.zfill(tamanho)[:tamanho]
+    try:
+        tamanho = int(tamanho)
+        v = str(valor).replace(".0", "").strip()
+        if v.lower() == 'nan' or v == 'None': v = ""
+        v = ''.join(filter(str.isdigit, v))
+        return v.zfill(tamanho)[:tamanho]
+    except Exception as e:
+        st.error(f"Erro no fmt_num. Valor: '{valor}', Tamanho: '{tamanho}'. Detalhe: {e}")
+        return "0" * int(tamanho) if str(tamanho).isdigit() else ""
 
 def fmt_alfa(valor, tamanho):
-    """Formata texto com espaços à direita e remove acentos"""
-    tamanho = int(tamanho) # <--- CORREÇÃO: Força a ser número
-    v = str(valor).strip()
-    if v.lower() == 'nan' or v == 'None': v = ""
-    v = ''.join(c for c in unicodedata.normalize('NFD', v) if unicodedata.category(c) != 'Mn')
-    return v.upper().ljust(tamanho)[:tamanho]
+    try:
+        tamanho = int(tamanho)
+        v = str(valor).strip()
+        if v.lower() == 'nan' or v == 'None': v = ""
+        v = ''.join(c for c in unicodedata.normalize('NFD', v) if unicodedata.category(c) != 'Mn')
+        return v.upper().ljust(tamanho)[:tamanho]
+    except Exception as e:
+        st.error(f"Erro no fmt_alfa. Valor: '{valor}', Tamanho: '{tamanho}'. Detalhe: {e}")
+        return " " * int(tamanho) if str(tamanho).isdigit() else ""
 
 def fmt_money(valor, tamanho):
-    """Formata valor financeiro (remove vírgula e preenche com zeros)"""
-    tamanho = int(tamanho) # <--- CORREÇÃO: Força a ser número
-    if pd.isna(valor) or str(valor).strip() == "" or str(valor).lower() == 'nan':
-        return "0".zfill(tamanho)
     try:
+        tamanho = int(tamanho)
+        if pd.isna(valor) or str(valor).strip() == "" or str(valor).lower() == 'nan':
+            return "0".zfill(tamanho)
         v = int(round(float(valor) * 100))
         return str(v).zfill(tamanho)[:tamanho]
-    except:
-        return "0".zfill(tamanho)
+    except Exception as e:
+        # Se falhar (ex: valor for um texto que não vira número), retorna zeros
+        return "0".zfill(int(tamanho)) if str(tamanho).isdigit() else ""
 
 def fmt_date(data):
-    """Formata data para DDMMAAAA"""
     if pd.isna(data) or str(data).strip() == "" or str(data).lower() == 'nan':
         return "00000000"
     try:
@@ -74,59 +79,56 @@ def fmt_date(data):
         return "00000000"
 
 def limpar_nosso_numero(nn):
-    """Limpa caracteres especiais do Nosso Número"""
     nn_str = str(nn).replace(".0", "").strip()
     if nn_str.lower() == 'nan' or nn_str == 'None': return ""
     return ''.join(filter(str.isalnum, nn_str))
 
 def fmt_convenio_bb(dados):
-    """Formata o bloco de convênio específico do Banco do Brasil (20 posições)"""
     conv = fmt_num(dados.get('convenio', ''), 9)
     fixo = "0126"
     brancos = fmt_alfa("", 5)
-    teste = fmt_alfa("", 2) # Espaços em branco para produção
+    teste = fmt_alfa("", 2)
     return conv + fixo + brancos + teste
 
 def fmt_conta_bb(dados):
-    """Formata o bloco de conta específico do Banco do Brasil (20 posições)"""
     ag = fmt_num(dados.get('agencia', ''), 5)
     dv_ag = fmt_alfa(dados.get('dv_agencia', ''), 1)
     conta = fmt_num(dados.get('conta', ''), 12)
     dv_conta = fmt_alfa(dados.get('dv_conta', ''), 1)
-    dv_ag_conta = fmt_alfa("", 1) # Geralmente em branco
+    dv_ag_conta = fmt_alfa("", 1)
     return ag + dv_ag + conta + dv_conta + dv_ag_conta
 
 # ==========================================
 # FUNÇÕES DE FORMATAÇÃO CNAB 240
 # ==========================================
 def header_arquivo(dados, nsa):
-    reg = fmt_num("001", 3) + fmt_num("0000", 4) + fmt_num("0", 1) + fmt_alfa("", 9) + fmt_num("2", 1) + fmt_num(dados['cnpj'], 14) + fmt_convenio_bb(dados) + fmt_conta_bb(dados) + fmt_alfa(dados['razao_social'], 30) + fmt_alfa("BANCO DO BRASIL", 30) + fmt_alfa("", 10) + fmt_num("1", 1) + datetime.now().strftime('%d%m%Y') + datetime.now().strftime('%H%M%S') + fmt_num(nsa, 6) + fmt_num("083", 3) + fmt_alfa("", 5) + fmt_alfa("", 20) + fmt_alfa("", 20) + fmt_alfa("", 29)
+    reg = fmt_num("001", 3) + fmt_num("0000", 4) + fmt_num("0", 1) + fmt_alfa("", 9) + fmt_num("2", 1) + fmt_num(dados.get('cnpj',''), 14) + fmt_convenio_bb(dados) + fmt_conta_bb(dados) + fmt_alfa(dados.get('razao_social',''), 30) + fmt_alfa("BANCO DO BRASIL", 30) + fmt_alfa("", 10) + fmt_num("1", 1) + datetime.now().strftime('%d%m%Y') + datetime.now().strftime('%H%M%S') + fmt_num(nsa, 6) + fmt_num("083", 3) + fmt_alfa("", 5) + fmt_alfa("", 20) + fmt_alfa("", 20) + fmt_alfa("", 29)
     return reg
 
 def header_lote(dados, lote, nsa):
-    reg = fmt_num("001", 3) + fmt_num(lote, 4) + fmt_num("1", 1) + fmt_alfa("R", 1) + fmt_num("01", 2) + fmt_alfa("", 2) + fmt_num("045", 3) + fmt_alfa("", 1) + fmt_num("2", 1) + fmt_num(dados['cnpj'], 15) + fmt_convenio_bb(dados) + fmt_conta_bb(dados) + fmt_alfa(dados['razao_social'], 30) + fmt_alfa("", 40) + fmt_alfa("", 40) + fmt_num(nsa, 8) + datetime.now().strftime('%d%m%Y') + fmt_num("0", 8) + fmt_alfa("", 33)
+    reg = fmt_num("001", 3) + fmt_num(lote, 4) + fmt_num("1", 1) + fmt_alfa("R", 1) + fmt_num("01", 2) + fmt_alfa("", 2) + fmt_num("045", 3) + fmt_alfa("", 1) + fmt_num("2", 1) + fmt_num(dados.get('cnpj',''), 15) + fmt_convenio_bb(dados) + fmt_conta_bb(dados) + fmt_alfa(dados.get('razao_social',''), 30) + fmt_alfa("", 40) + fmt_alfa("", 40) + fmt_num(nsa, 8) + datetime.now().strftime('%d%m%Y') + fmt_num("0", 8) + fmt_alfa("", 33)
     return reg
 
 def trailer_lote(lote, qtd_registros):
-    # Força a conversão para inteiro antes de formatar
-    lote_int = int(lote)
-    qtd_int = int(qtd_registros)
-    return fmt_num("001", 3) + fmt_num(lote_int, 4) + fmt_num("5", 1) + fmt_alfa("", 9) + fmt_num(qtd_int, 6) + fmt_num("0", 6) + fmt_alfa("", 205)
+    return fmt_num("001", 3) + fmt_num(lote, 4) + fmt_num("5", 1) + fmt_alfa("", 9) + fmt_num(qtd_registros, 6) + fmt_num("0", 6) + fmt_alfa("", 205)
 
 def trailer_arquivo(qtd_lotes, qtd_registros):
-    # Força a conversão para inteiro antes de formatar
-    lotes_int = int(qtd_lotes)
-    qtd_int = int(qtd_registros)
-    return fmt_num("001", 3) + fmt_num("9999", 4) + fmt_num("9", 1) + fmt_alfa("", 9) + fmt_num(lotes_int, 6) + fmt_num(qtd_int, 6) + fmt_num("0", 6) + fmt_alfa("", 205)
+    return fmt_num("001", 3) + fmt_num("9999", 4) + fmt_num("9", 1) + fmt_alfa("", 9) + fmt_num(qtd_lotes, 6) + fmt_num(qtd_registros, 6) + fmt_num("0", 6) + fmt_alfa("", 205)
 
-def segmento_p(row, lote, seq, dados, colunas_map, cod_instrucao, nova_data_venc=""):
+def segmento_p(row, lote, seq, dados, colunas_map, cod_instrucao, nova_data_venc=None):
     reg = fmt_num("001", 3) + fmt_num(lote, 4) + fmt_num("3", 1) + fmt_num(seq, 5) + fmt_alfa("P", 1) + fmt_alfa("", 1) + fmt_num(cod_instrucao, 2) + fmt_conta_bb(dados)
     nn = limpar_nosso_numero(row.get(colunas_map['nn'], ""))
     reg += fmt_alfa(nn, 20) + fmt_num(dados.get('carteira', '17'), 1) + fmt_num("1", 1) + fmt_alfa("2", 1) + fmt_num("2", 1) + fmt_alfa("2", 1)
     seu_numero = str(row.get(colunas_map['doc'], "")).replace(".0", "")
     if seu_numero.lower() == 'nan': seu_numero = ""
     reg += fmt_alfa(seu_numero, 15)
-    vencimento = nova_data_venc.replace("/", "") if cod_instrucao == "06" and nova_data_venc else fmt_date(row.get(colunas_map['venc']))
+
+    # CORREÇÃO NA DATA: Se for instrução 06, formata a data do calendário corretamente
+    if cod_instrucao == "06" and nova_data_venc:
+        vencimento = nova_data_venc.strftime('%d%m%Y')
+    else:
+        vencimento = fmt_date(row.get(colunas_map['venc']))
+
     valor_boleto = row.get(colunas_map['valor']) if cod_instrucao == "47" else row.get(colunas_map['montante'])
     reg += vencimento + fmt_money(valor_boleto, 15) + fmt_num("0", 5) + fmt_alfa("", 1) + fmt_num("99", 2) + fmt_alfa("N", 1)
     reg += fmt_date(row.get(colunas_map['venc'])) + fmt_num("3", 1) + fmt_num("0", 8) + fmt_num("0", 15) + fmt_num("0", 1) + fmt_num("0", 8) + fmt_num("0", 15) + fmt_num("0", 15) + fmt_num("0", 15) + fmt_alfa("", 25) + fmt_num("3", 1) + fmt_num("0", 2) + fmt_num("0", 1) + fmt_num("0", 3) + fmt_num("09", 2) + fmt_num("0", 10) + fmt_alfa("", 1)
@@ -136,10 +138,7 @@ def segmento_q(row, lote, seq, colunas_map, cod_instrucao):
     reg = fmt_num("001", 3) + fmt_num(lote, 4) + fmt_num("3", 1) + fmt_num(seq, 5) + fmt_alfa("Q", 1) + fmt_alfa("", 1) + fmt_num(cod_instrucao, 2)
     cpf_cnpj = str(row.get("cnpj_cpf", "")).strip().replace(".0", "")
     if cpf_cnpj.lower() == 'nan': cpf_cnpj = ""
-
-    # CORREÇÃO AQUI: Trocado > por >
     tipo_inscricao = "2" if len(cpf_cnpj) > 11 else ("1" if cpf_cnpj else "0")
-
     reg += fmt_num(tipo_inscricao, 1) + fmt_num(cpf_cnpj, 15)
     nome = str(row.get("nome", ""))
     reg += fmt_alfa("" if nome.lower() == 'nan' else nome, 40)
