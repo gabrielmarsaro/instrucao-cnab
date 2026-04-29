@@ -191,51 +191,83 @@ st.title("🏦 Gerador de Remessa CNAB 240")
 aba_gerador, aba_clientes, aba_convenios = st.tabs(["Gerar Remessa", "Meus Clientes", "Meus Convênios"])
 
 # --- ABA: MEUS CLIENTES ---
+# --- ABA: MEUS CLIENTES ---
 with aba_clientes:
     st.header("Gestão de Clientes")
 
-    with st.expander("➕ Cadastrar Novo Cliente"):
-        with st.form("form_novo_cliente"):
-            col1, col2 = st.columns(2)
-            cli_cnpj_cpf = col1.text_input("CNPJ/CPF (Apenas números)")
-            cli_nome = col2.text_input("Nome / Razão Social")
+    col_manual, col_planilha = st.columns(2)
 
-            col3, col4 = st.columns(2)
-            cli_end = col3.text_input("Endereço")
-            cli_bairro = col4.text_input("Bairro")
+    with col_manual:
+        with st.expander("➕ Cadastrar Manualmente"):
+            with st.form("form_novo_cliente"):
+                cli_cnpj_cpf = st.text_input("CNPJ/CPF (Apenas números)")
+                cli_nome = st.text_input("Nome / Razão Social")
+                cli_end = st.text_input("Endereço")
+                cli_bairro = st.text_input("Bairro")
+                cli_cep = st.text_input("CEP (Apenas números)")
+                cli_cidade = st.text_input("Cidade")
+                cli_uf = st.text_input("UF")
 
-            col5, col6, col7 = st.columns([2, 3, 1])
-            cli_cep = col5.text_input("CEP (Apenas números)")
-            cli_cidade = col6.text_input("Cidade")
-            cli_uf = col7.text_input("UF")
+                if st.form_submit_button("Salvar Cliente"):
+                    novo_cliente = {
+                        "user_id": st.session_state.user.id,
+                        "cnpj_cpf": cli_cnpj_cpf,
+                        "nome": cli_nome,
+                        "endereco": cli_end,
+                        "bairro": cli_bairro,
+                        "cep": cli_cep,
+                        "cidade": cli_cidade,
+                        "uf": cli_uf
+                    }
+                    try:
+                        supabase.table("clientes").insert(novo_cliente).execute()
+                        st.success("Cliente cadastrado com sucesso!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao salvar: {e}")
 
-            if st.form_submit_button("Salvar Cliente"):
-                novo_cliente = {
-                    "user_id": st.session_state.user.id,
-                    "cnpj_cpf": cli_cnpj_cpf,
-                    "nome": cli_nome,
-                    "endereco": cli_end,
-                    "bairro": cli_bairro,
-                    "cep": cli_cep,
-                    "cidade": cli_cidade,
-                    "uf": cli_uf
-                }
+    with col_planilha:
+        with st.expander("📂 Importar via Planilha (Excel)"):
+            st.write("A planilha deve conter as colunas: **cnpj_cpf, nome, endereco, bairro, cep, cidade, uf**")
+            arquivo_importacao = st.file_uploader("Selecione a planilha de clientes", type=["xlsx", "xls"])
+
+            if arquivo_importacao and st.button("Processar Importação"):
                 try:
-                    supabase.table("clientes").insert(novo_cliente).execute()
-                    st.success("Cliente cadastrado com sucesso!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Erro ao salvar: {e}")
+                    df_import = pd.read_excel(arquivo_importacao)
 
+                    # Padroniza o nome das colunas para minúsculo para evitar erros de digitação
+                    df_import.columns = [str(c).strip().lower() for c in df_import.columns]
+
+                    clientes_para_inserir = []
+                    for index, row in df_import.iterrows():
+                        clientes_para_inserir.append({
+                            "user_id": st.session_state.user.id,
+                            "cnpj_cpf": str(row.get("cnpj_cpf", "")).replace(".0", ""),
+                            "nome": str(row.get("nome", "")),
+                            "endereco": str(row.get("endereco", "")),
+                            "bairro": str(row.get("bairro", "")),
+                            "cep": str(row.get("cep", "")).replace(".0", ""),
+                            "cidade": str(row.get("cidade", "")),
+                            "uf": str(row.get("uf", ""))
+                        })
+
+                    if clientes_para_inserir:
+                        # O Supabase permite inserir uma lista inteira de uma vez
+                        supabase.table("clientes").insert(clientes_para_inserir).execute()
+                        st.success(f"{len(clientes_para_inserir)} clientes importados com sucesso!")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Erro na importação. Verifique os nomes das colunas. Detalhe: {e}")
+
+    st.divider()
     st.write("### Clientes Cadastrados")
     resposta_cli = supabase.table("clientes").select("*").eq("user_id", st.session_state.user.id).execute()
     df_clientes = pd.DataFrame(resposta_cli.data)
     if not df_clientes.empty:
-        # Mostra a tabela sem as colunas de controle do sistema
         st.dataframe(df_clientes.drop(columns=['id', 'user_id', 'created_at', 'id_cliente_planilha']), use_container_width=True)
     else:
         st.info("Nenhum cliente cadastrado ainda.")
-
+        
 # --- ABA: MEUS CONVÊNIOS ---
 with aba_convenios:
     st.header("Gestão de Convênios")
