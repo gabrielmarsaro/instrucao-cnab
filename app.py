@@ -35,18 +35,24 @@ if 'lotes' not in st.session_state:
 # FUNÇÕES AUXILIARES DE FORMATAÇÃO
 # ==========================================
 def fmt_num(valor, tamanho):
+    """Formata números com zeros à esquerda"""
+    tamanho = int(tamanho) # <--- CORREÇÃO: Força a ser número
     v = str(valor).replace(".0", "").strip()
     if v.lower() == 'nan' or v == 'None': v = ""
     v = ''.join(filter(str.isdigit, v))
     return v.zfill(tamanho)[:tamanho]
 
 def fmt_alfa(valor, tamanho):
+    """Formata texto com espaços à direita e remove acentos"""
+    tamanho = int(tamanho) # <--- CORREÇÃO: Força a ser número
     v = str(valor).strip()
     if v.lower() == 'nan' or v == 'None': v = ""
     v = ''.join(c for c in unicodedata.normalize('NFD', v) if unicodedata.category(c) != 'Mn')
     return v.upper().ljust(tamanho)[:tamanho]
 
 def fmt_money(valor, tamanho):
+    """Formata valor financeiro (remove vírgula e preenche com zeros)"""
+    tamanho = int(tamanho) # <--- CORREÇÃO: Força a ser número
     if pd.isna(valor) or str(valor).strip() == "" or str(valor).lower() == 'nan':
         return "0".zfill(tamanho)
     try:
@@ -56,6 +62,7 @@ def fmt_money(valor, tamanho):
         return "0".zfill(tamanho)
 
 def fmt_date(data):
+    """Formata data para DDMMAAAA"""
     if pd.isna(data) or str(data).strip() == "" or str(data).lower() == 'nan':
         return "00000000"
     try:
@@ -67,23 +74,26 @@ def fmt_date(data):
         return "00000000"
 
 def limpar_nosso_numero(nn):
+    """Limpa caracteres especiais do Nosso Número"""
     nn_str = str(nn).replace(".0", "").strip()
     if nn_str.lower() == 'nan' or nn_str == 'None': return ""
     return ''.join(filter(str.isalnum, nn_str))
 
 def fmt_convenio_bb(dados):
+    """Formata o bloco de convênio específico do Banco do Brasil (20 posições)"""
     conv = fmt_num(dados.get('convenio', ''), 9)
     fixo = "0126"
     brancos = fmt_alfa("", 5)
-    teste = fmt_alfa("", 2)
+    teste = fmt_alfa("", 2) # Espaços em branco para produção
     return conv + fixo + brancos + teste
 
 def fmt_conta_bb(dados):
+    """Formata o bloco de conta específico do Banco do Brasil (20 posições)"""
     ag = fmt_num(dados.get('agencia', ''), 5)
     dv_ag = fmt_alfa(dados.get('dv_agencia', ''), 1)
     conta = fmt_num(dados.get('conta', ''), 12)
     dv_conta = fmt_alfa(dados.get('dv_conta', ''), 1)
-    dv_ag_conta = fmt_alfa("", 1)
+    dv_ag_conta = fmt_alfa("", 1) # Geralmente em branco
     return ag + dv_ag + conta + dv_conta + dv_ag_conta
 
 # ==========================================
