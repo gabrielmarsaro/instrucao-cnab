@@ -187,7 +187,6 @@ if st.sidebar.button("Sair"):
     logout()
 
 st.title("🏦 Gerador de Remessa CNAB 240")
-    
 aba_gerador, aba_clientes, aba_convenios = st.tabs(["🚀 Gerar Remessa", "👥 Meus Clientes", "🏦 Meus Convênios"])
 
     # --- ABA: GERAR REMESSA ---
