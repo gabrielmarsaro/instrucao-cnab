@@ -140,7 +140,7 @@ def segmento_q(row, lote, seq, colunas_map, cod_instrucao):
     reg += fmt_num("0", 1) + fmt_num("0", 15) + fmt_alfa("", 40) + fmt_num("0", 3) + fmt_alfa("", 20) + fmt_alfa("", 8)
     return reg
 
-# --- Funções de Autenticação ---
+# --- Funções de Autenticação ---f
 # --- Funções de Autenticação ---
 def login(email, password):
     try:
@@ -171,11 +171,35 @@ if not st.session_state.user:
 
     with tab_login:
         email_login = st.text_input("E-mail", key="log_email")
-        senha_login = st.text_input("Senha", type="password", key="log_senha")aba_gerador, aba_clientes, aba_convenios = st.tabs(["🚀 Gerar Remessa", "👥 Meus Clientes", "🏦 Meus Convênios"])
+        senha_login = st.text_input("Senha", type="password", key="log_senha")
 
-# --- ABA: GERAR REMESSA ---
-with aba_gerador:
-    st.header("Gerador de Arquivo Remessa")
+            if st.button("Entrar", type="primary", use_container_width=True):
+                try:
+                    resposta = supabase.auth.signInWithPassword({"email": email_login, "password": senha_login})
+                    st.session_state.user = resposta.user
+                    st.rerun()
+                except Exception as e:
+                    st.error("E-mail ou senha incorretos.")
+
+# ==========================================
+# ÁREA LOGADA (SISTEMA PRINCIPAL)
+# ==========================================
+if st.session_state.user:
+    # Botão de Logout no topo
+    col_vazia, col_logout = st.columns([8, 1])
+    with col_logout:
+        if st.button("Sair", use_container_width=True):
+            supabase.auth.signOut()
+            st.session_state.user = None
+            st.rerun()
+
+    st.title("Sistema Gerador de CNAB 240")
+
+    aba_gerador, aba_clientes, aba_convenios = st.tabs(["🚀 Gerar Remessa", "👥 Meus Clientes", "🏦 Meus Convênios"])
+
+    # --- ABA: GERAR REMESSA ---
+    with aba_gerador:
+        st.header("Gerador de Arquivo Remessa")
 
     # Busca convênios para o selectbox
     resposta_conv = supabase.table("convenios").select("*").eq("user_id", st.session_state.user.id).execute()
