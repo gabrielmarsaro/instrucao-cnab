@@ -226,22 +226,24 @@ with aba_clientes:
                     except Exception as e:
                         st.error(f"Erro ao salvar: {e}")
 
-    with col_planilha:
+        with col_planilha:
         with st.expander("📂 Importar via Planilha (Excel)"):
-            st.write("A planilha deve conter as colunas: **cnpj_cpf, nome, endereco, bairro, cep, cidade, uf**")
+            st.write("A planilha deve conter as colunas: **codigo, cnpj_cpf, nome, endereco, bairro, cep, cidade, uf**")
             arquivo_importacao = st.file_uploader("Selecione a planilha de clientes", type=["xlsx", "xls"])
 
             if arquivo_importacao and st.button("Processar Importação"):
                 try:
                     df_import = pd.read_excel(arquivo_importacao)
-
-                    # Padroniza o nome das colunas para minúsculo para evitar erros de digitação
                     df_import.columns = [str(c).strip().lower() for c in df_import.columns]
 
                     clientes_para_inserir = []
                     for index, row in df_import.iterrows():
+                        # Pega a coluna 'codigo' ou 'id' da planilha
+                        cod_planilha = str(row.get("codigo", row.get("id", ""))).strip().replace(".0", "")
+
                         clientes_para_inserir.append({
                             "user_id": st.session_state.user.id,
+                            "id_cliente_planilha": cod_planilha, # <-- AGORA SALVA O CÓDIGO!
                             "cnpj_cpf": str(row.get("cnpj_cpf", "")).replace(".0", ""),
                             "nome": str(row.get("nome", "")),
                             "endereco": str(row.get("endereco", "")),
@@ -252,12 +254,11 @@ with aba_clientes:
                         })
 
                     if clientes_para_inserir:
-                        # O Supabase permite inserir uma lista inteira de uma vez
                         supabase.table("clientes").insert(clientes_para_inserir).execute()
                         st.success(f"{len(clientes_para_inserir)} clientes importados com sucesso!")
                         st.rerun()
                 except Exception as e:
-                    st.error(f"Erro na importação. Verifique os nomes das colunas. Detalhe: {e}")
+                    st.error(f"Erro na importação: {e}")
 
     st.divider()
     st.write("### Clientes Cadastrados")
@@ -392,26 +393,23 @@ with aba_gerador:
                         'cliente': next((c for c in colunas_bol_lower if 'cliente' in c or 'nome' in c), 'cliente')
                     }
 
-                    seq_reg = 1
+                                        seq_reg = 1
                     for index, row in df_boletos.iterrows():
                         dados_linha = row.to_dict()
 
-                        # 2. CRUZAR DADOS DA PLANILHA COM O BANCO DE DADOS
-                        nome_coluna_planilha = colunas_map.get('cliente')
+                        # 2. CRUZAR DADOS PELO CÓDIGO DO CLIENTE
+                        # Tenta achar a coluna de código na planilha de boletos (ex: 'cliente', 'codigo', 'id')
+                        nome_coluna_codigo = next((c for c in colunas_bol_lower if 'código' in c or 'codigo' in c or 'cliente' in c), None)
 
-                        if not df_clientes_bd.empty and nome_coluna_planilha in dados_linha:
-                            # Limpa o nome da planilha (tira espaços extras e deixa maiúsculo)
-                            nome_planilha = str(dados_linha[nome_coluna_planilha]).strip().upper()
+                        if not df_clientes_bd.empty and nome_coluna_codigo and nome_coluna_codigo in dados_linha:
+                            # Pega o código que veio na planilha de boletos
+                            cod_boleto = str(dados_linha[nome_coluna_codigo]).strip().replace(".0", "")
 
-                            # Limpa os nomes do banco para comparar da mesma forma
-                            nomes_banco = df_clientes_bd['nome'].astype(str).str.strip().str.upper()
-
-                            # Tenta achar correspondência
-                            cli_match = df_clientes_bd[nomes_banco == nome_planilha]
+                            # Procura esse código exato no banco de dados
+                            cli_match = df_clientes_bd[df_clientes_bd['id_cliente_planilha'] == cod_boleto]
 
                             if not cli_match.empty:
                                 cli_dados = cli_match.iloc[0]
-                                # Injeta os dados do banco na linha que vai pro CNAB
                                 dados_linha['cnpj_cpf'] = cli_dados.get('cnpj_cpf', '')
                                 dados_linha['nome'] = cli_dados.get('nome', '')
                                 dados_linha['endereco'] = cli_dados.get('endereco', '')
@@ -420,10 +418,9 @@ with aba_gerador:
                                 dados_linha['cidade'] = cli_dados.get('cidade', '')
                                 dados_linha['uf'] = cli_dados.get('uf', '')
                             else:
-                                # AVISO: Mostra na tela quem ele não achou
-                                st.warning(f"⚠️ Cliente '{nome_planilha}' da planilha não foi encontrado no banco de dados. O CNPJ ficará zerado.")
+                                st.warning(f"⚠️ Cliente com código '{cod_boleto}' não encontrado no banco. CNPJ ficará zerado.")
 
-                        # Gera as linhas do CNAB com os dados completos
+                        # Gera as linhas do CNAB
                         linhas.append(segmento_p(dados_linha, numero_lote, seq_reg, dados_bancarios, colunas_map, cod_instrucao, lote['nova_data']))
                         seq_reg += 1
                         linhas.append(segmento_q(dados_linha, numero_lote, seq_reg, colunas_map, cod_instrucao))
