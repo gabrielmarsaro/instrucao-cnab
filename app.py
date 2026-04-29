@@ -393,7 +393,7 @@ with aba_gerador:
                         'cliente': next((c for c in colunas_bol_lower if 'cliente' in c or 'nome' in c), 'cliente')
                     }
 
-                                        seq_reg = 1
+                    seq_reg = 1
                     for index, row in df_boletos.iterrows():
                         dados_linha = row.to_dict()
 
