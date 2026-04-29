@@ -356,11 +356,15 @@ with aba_gerador:
         for i, lote in enumerate(st.session_state.lotes):
             st.write(f"**Lote {i+1}:** {lote['instrucao']} - Arquivo: {lote['nome_arquivo']} ({len(lote['df'])} boletos)")
 
-        if st.button("🚀 GERAR ARQUIVO REMESSA FINAL", type="primary"):
+                if st.button("🚀 GERAR ARQUIVO REMESSA FINAL", type="primary"):
             try:
                 # Pega os dados do convênio selecionado
                 dados_bancarios = df_convenios[df_convenios['razao_social'] == convenio_selecionado].iloc[0].to_dict()
                 nsa = 1 # Em um sistema real, buscaríamos o último NSA do banco
+
+                # 1. BUSCAR CLIENTES DO BANCO DE DADOS
+                resposta_cli = supabase.table("clientes").select("*").eq("user_id", st.session_state.user.id).execute()
+                df_clientes_bd = pd.DataFrame(resposta_cli.data)
 
                 linhas = []
                 linhas.append(header_arquivo(dados_bancarios, nsa))
@@ -375,7 +379,7 @@ with aba_gerador:
                     df_boletos = lote['df']
                     cod_instrucao = lote['instrucao'].split(" - ")[0].strip()
 
-                    # Mapeamento de colunas (simplificado)
+                    # Mapeamento de colunas
                     colunas_bol_lower = [str(c).strip().lower() for c in df_boletos.columns]
                     df_boletos.columns = colunas_bol_lower
                     colunas_map = {
@@ -384,16 +388,35 @@ with aba_gerador:
                         'venc': next((c for c in colunas_bol_lower if 'vencimento' in c), 'vencimento líquido'),
                         'valor': next((c for c in colunas_bol_lower if 'corrigido' in c or 'novo valor' in c), 'total corrigido'),
                         'montante': next((c for c in colunas_bol_lower if 'montante' in c), 'montante'),
-                        'cliente': next((c for c in colunas_bol_lower if 'cliente' in c), 'cliente')
+                        'cliente': next((c for c in colunas_bol_lower if 'cliente' in c or 'nome' in c), 'cliente')
                     }
 
                     seq_reg = 1
                     for index, row in df_boletos.iterrows():
-                        # Aqui faríamos o merge com df_clientes do banco de dados
-                        # Para o exemplo, passamos a linha direto (assumindo que tem os dados)
-                        linhas.append(segmento_p(row, numero_lote, seq_reg, dados_bancarios, colunas_map, cod_instrucao, lote['nova_data']))
+                        dados_linha = row.to_dict()
+
+                        # 2. CRUZAR DADOS DA PLANILHA COM O BANCO DE DADOS
+                        if not df_clientes_bd.empty and colunas_map['cliente'] in dados_linha:
+                            nome_planilha = str(dados_linha[colunas_map['cliente']]).strip().upper()
+
+                            # Procura o cliente no banco pelo nome (ignorando maiúsculas/minúsculas)
+                            cli_match = df_clientes_bd[df_clientes_bd['nome'].str.upper() == nome_planilha]
+
+                            if not cli_match.empty:
+                                cli_dados = cli_match.iloc[0]
+                                # Preenche os dados faltantes com o que está no banco
+                                dados_linha['cnpj_cpf'] = cli_dados.get('cnpj_cpf', '')
+                                dados_linha['nome'] = cli_dados.get('nome', '')
+                                dados_linha['endereco'] = cli_dados.get('endereco', '')
+                                dados_linha['bairro'] = cli_dados.get('bairro', '')
+                                dados_linha['cep'] = cli_dados.get('cep', '')
+                                dados_linha['cidade'] = cli_dados.get('cidade', '')
+                                dados_linha['uf'] = cli_dados.get('uf', '')
+
+                        # Gera as linhas do CNAB com os dados completos
+                        linhas.append(segmento_p(dados_linha, numero_lote, seq_reg, dados_bancarios, colunas_map, cod_instrucao, lote['nova_data']))
                         seq_reg += 1
-                        linhas.append(segmento_q(row, numero_lote, seq_reg, colunas_map, cod_instrucao))
+                        linhas.append(segmento_q(dados_linha, numero_lote, seq_reg, colunas_map, cod_instrucao))
                         seq_reg += 1
 
                     linhas.append(trailer_lote(numero_lote, seq_reg + 1))
