@@ -35,21 +35,18 @@ if 'lotes' not in st.session_state:
 # FUNÇÕES AUXILIARES DE FORMATAÇÃO
 # ==========================================
 def fmt_num(valor, tamanho):
-    """Formata números com zeros à esquerda"""
     v = str(valor).replace(".0", "").strip()
     if v.lower() == 'nan' or v == 'None': v = ""
     v = ''.join(filter(str.isdigit, v))
     return v.zfill(tamanho)[:tamanho]
 
 def fmt_alfa(valor, tamanho):
-    """Formata texto com espaços à direita e remove acentos"""
     v = str(valor).strip()
     if v.lower() == 'nan' or v == 'None': v = ""
     v = ''.join(c for c in unicodedata.normalize('NFD', v) if unicodedata.category(c) != 'Mn')
     return v.upper().ljust(tamanho)[:tamanho]
 
 def fmt_money(valor, tamanho):
-    """Formata valor financeiro (remove vírgula e preenche com zeros)"""
     if pd.isna(valor) or str(valor).strip() == "" or str(valor).lower() == 'nan':
         return "0".zfill(tamanho)
     try:
@@ -59,7 +56,6 @@ def fmt_money(valor, tamanho):
         return "0".zfill(tamanho)
 
 def fmt_date(data):
-    """Formata data para DDMMAAAA"""
     if pd.isna(data) or str(data).strip() == "" or str(data).lower() == 'nan':
         return "00000000"
     try:
@@ -71,34 +67,28 @@ def fmt_date(data):
         return "00000000"
 
 def limpar_nosso_numero(nn):
-    """Limpa caracteres especiais do Nosso Número"""
     nn_str = str(nn).replace(".0", "").strip()
     if nn_str.lower() == 'nan' or nn_str == 'None': return ""
     return ''.join(filter(str.isalnum, nn_str))
 
 def fmt_convenio_bb(dados):
-    """Formata o bloco de convênio específico do Banco do Brasil (20 posições)"""
     conv = fmt_num(dados.get('convenio', ''), 9)
     fixo = "0126"
     brancos = fmt_alfa("", 5)
-    teste = fmt_alfa("", 2) # Espaços em branco para produção
+    teste = fmt_alfa("", 2)
     return conv + fixo + brancos + teste
 
 def fmt_conta_bb(dados):
-    """Formata o bloco de conta específico do Banco do Brasil (20 posições)"""
     ag = fmt_num(dados.get('agencia', ''), 5)
     dv_ag = fmt_alfa(dados.get('dv_agencia', ''), 1)
     conta = fmt_num(dados.get('conta', ''), 12)
     dv_conta = fmt_alfa(dados.get('dv_conta', ''), 1)
-    dv_ag_conta = fmt_alfa("", 1) # Geralmente em branco
+    dv_ag_conta = fmt_alfa("", 1)
     return ag + dv_ag + conta + dv_conta + dv_ag_conta
+
 # ==========================================
 # FUNÇÕES DE FORMATAÇÃO CNAB 240
 # ==========================================
-# ⚠️ ATENÇÃO GABRIEL: Cole aqui as suas funções originais do CNAB 
-# (header_arquivo, header_lote, segmento_p, segmento_q, trailer_lote, trailer_arquivo)
-# Não apague as suas funções que formatam os espaços e posições!
-
 def header_arquivo(dados, nsa):
     reg = fmt_num("001", 3) + fmt_num("0000", 4) + fmt_num("0", 1) + fmt_alfa("", 9) + fmt_num("2", 1) + fmt_num(dados['cnpj'], 14) + fmt_convenio_bb(dados) + fmt_conta_bb(dados) + fmt_alfa(dados['razao_social'], 30) + fmt_alfa("BANCO DO BRASIL", 30) + fmt_alfa("", 10) + fmt_num("1", 1) + datetime.now().strftime('%d%m%Y') + datetime.now().strftime('%H%M%S') + fmt_num(nsa, 6) + fmt_num("083", 3) + fmt_alfa("", 5) + fmt_alfa("", 20) + fmt_alfa("", 20) + fmt_alfa("", 29)
     return reg
@@ -130,7 +120,10 @@ def segmento_q(row, lote, seq, colunas_map, cod_instrucao):
     reg = fmt_num("001", 3) + fmt_num(lote, 4) + fmt_num("3", 1) + fmt_num(seq, 5) + fmt_alfa("Q", 1) + fmt_alfa("", 1) + fmt_num(cod_instrucao, 2)
     cpf_cnpj = str(row.get("cnpj_cpf", "")).strip().replace(".0", "")
     if cpf_cnpj.lower() == 'nan': cpf_cnpj = ""
+
+    # CORREÇÃO AQUI: Trocado > por >
     tipo_inscricao = "2" if len(cpf_cnpj) > 11 else ("1" if cpf_cnpj else "0")
+
     reg += fmt_num(tipo_inscricao, 1) + fmt_num(cpf_cnpj, 15)
     nome = str(row.get("nome", ""))
     reg += fmt_alfa("" if nome.lower() == 'nan' else nome, 40)
@@ -146,7 +139,7 @@ def segmento_q(row, lote, seq, colunas_map, cod_instrucao):
     reg += fmt_alfa("" if uf.lower() == 'nan' else uf, 2)
     reg += fmt_num("0", 1) + fmt_num("0", 15) + fmt_alfa("", 40) + fmt_num("0", 3) + fmt_alfa("", 20) + fmt_alfa("", 8)
     return reg
-
+    
 # ==========================================
 # TELA DE LOGIN E CADASTRO
 # ==========================================
