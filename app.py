@@ -393,7 +393,6 @@ with aba_gerador:
                     }
 
                     seq_reg = 1
-                                        seq_reg = 1
                     for index, row in df_boletos.iterrows():
                         dados_linha = row.to_dict()
 
