@@ -108,10 +108,16 @@ def header_lote(dados, lote, nsa):
     return reg
 
 def trailer_lote(lote, qtd_registros):
-    return fmt_num("001", 3) + fmt_num(lote, 4) + fmt_num("5", 1) + fmt_alfa("", 9) + fmt_num(qtd_registros, 6) + fmt_num("0", 6) + fmt_alfa("", 205)
+    # Força a conversão para inteiro antes de formatar
+    lote_int = int(lote)
+    qtd_int = int(qtd_registros)
+    return fmt_num("001", 3) + fmt_num(lote_int, 4) + fmt_num("5", 1) + fmt_alfa("", 9) + fmt_num(qtd_int, 6) + fmt_num("0", 6) + fmt_alfa("", 205)
 
 def trailer_arquivo(qtd_lotes, qtd_registros):
-    return fmt_num("001", 3) + fmt_num("9999", 4) + fmt_num("9", 1) + fmt_alfa("", 9) + fmt_num(qtd_lotes, 6) + fmt_num(qtd_registros, 6) + fmt_num("0", 6) + fmt_alfa("", 205)
+    # Força a conversão para inteiro antes de formatar
+    lotes_int = int(qtd_lotes)
+    qtd_int = int(qtd_registros)
+    return fmt_num("001", 3) + fmt_num("9999", 4) + fmt_num("9", 1) + fmt_alfa("", 9) + fmt_num(lotes_int, 6) + fmt_num(qtd_int, 6) + fmt_num("0", 6) + fmt_alfa("", 205)
 
 def segmento_p(row, lote, seq, dados, colunas_map, cod_instrucao, nova_data_venc=""):
     reg = fmt_num("001", 3) + fmt_num(lote, 4) + fmt_num("3", 1) + fmt_num(seq, 5) + fmt_alfa("P", 1) + fmt_alfa("", 1) + fmt_num(cod_instrucao, 2) + fmt_conta_bb(dados)
