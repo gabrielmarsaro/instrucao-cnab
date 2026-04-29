@@ -187,11 +187,10 @@ if st.sidebar.button("Sair"):
     logout()
 
 st.title("🏦 Gerador de Remessa CNAB 240")
-
-aba_gerador, aba_clientes, aba_convenios = st.tabs(["🚀 Gerar Remessa", "👥 Meus Clientes", "🏦 Meus Convênios"])
+    aba_gerador, aba_clientes, aba_convenios = st.tabs(["🚀 Gerar Remessa", "👥 Meus Clientes", "🏦 Meus Convênios"])
 
     # --- ABA: GERAR REMESSA ---
-with aba_gerador:
+    with aba_gerador:
         st.header("Gerador de Arquivo Remessa")
 
         # Busca convênios para o selectbox
