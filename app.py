@@ -34,50 +34,30 @@ if 'lotes' not in st.session_state:
 # ==========================================
 # FUNÇÕES AUXILIARES DE FORMATAÇÃO (BLINDADAS)
 # ==========================================
+def only_digits(v):
+    return ''.join(filter(str.isdigit, str(v))) if v is not None else ""
+
 def fmt_num(valor, tamanho):
-    try:
-        tamanho = int(tamanho)
-        v = str(valor).replace(".0", "").strip()
-        if v.lower() == 'nan' or v == 'None': v = ""
-        v = ''.join(filter(str.isdigit, v))
-        return v.zfill(tamanho)[:tamanho]
-    except Exception as e:
-        st.error(f"Erro no fmt_num. Valor: '{valor}', Tamanho: '{tamanho}'. Detalhe: {e}")
-        return "0" * int(tamanho) if str(tamanho).isdigit() else ""
+    v = only_digits(valor)
+    return v.zfill(tamanho)[:tamanho]
 
 def fmt_alfa(valor, tamanho):
-    try:
-        tamanho = int(tamanho)
-        v = str(valor).strip()
-        if v.lower() == 'nan' or v == 'None': v = ""
-        v = ''.join(c for c in unicodedata.normalize('NFD', v) if unicodedata.category(c) != 'Mn')
-        return v.upper().ljust(tamanho)[:tamanho]
-    except Exception as e:
-        st.error(f"Erro no fmt_alfa. Valor: '{valor}', Tamanho: '{tamanho}'. Detalhe: {e}")
-        return " " * int(tamanho) if str(tamanho).isdigit() else ""
+    v = str(valor or "").strip()
+    v = ''.join(c for c in unicodedata.normalize('NFD', v) if unicodedata.category(c) != 'Mn')
+    return v.upper().ljust(tamanho)[:tamanho]
 
 def fmt_money(valor, tamanho):
     try:
-        tamanho = int(tamanho)
-        if pd.isna(valor) or str(valor).strip() == "" or str(valor).lower() == 'nan':
-            return "0".zfill(tamanho)
         v = int(round(float(valor) * 100))
         return str(v).zfill(tamanho)[:tamanho]
-    except Exception as e:
-        # Se falhar (ex: valor for um texto que não vira número), retorna zeros
-        return "0".zfill(int(tamanho)) if str(tamanho).isdigit() else ""
+    except:
+        return "0".zfill(tamanho)
 
 def fmt_date(data):
-    if pd.isna(data) or str(data).strip() == "" or str(data).lower() == 'nan':
-        return "00000000"
     try:
-        if isinstance(data, pd.Timestamp) or isinstance(data, datetime):
-            return data.strftime('%d%m%Y')
-        d = pd.to_datetime(data)
-        return d.strftime('%d%m%Y')
+        return pd.to_datetime(data).strftime('%d%m%Y')
     except:
         return "00000000"
-
 def limpar_nosso_numero(nn):
     nn_str = str(nn).replace(".0", "").strip()
     if nn_str.lower() == 'nan' or nn_str == 'None': return ""
@@ -102,224 +82,197 @@ def fmt_conta_bb(dados):
 # FUNÇÕES DE FORMATAÇÃO CNAB 240
 # ==========================================
 def header_arquivo(dados, nsa):
-    # 1. Tratamento de dados com tamanhos EXATOS travados
-    banco = '001'                                                                   # 001-003 (3)
-    lote = '0000'                                                                   # 004-007 (4)
-    registro = '0'                                                                  # 008-008 (1)
-    brancos1 = ' ' * 9                                                              # 009-017 (9)
-    tipo_inscricao = '2'                                                            # 018-018 (1)
-    cnpj = str(dados.get('cnpj', '')).replace('.', '').replace('/', '').replace('-', '').zfill(14)[:14] # 019-032 (14)
 
-    # Bloco Convênio BB (Exatas 20 posições)
-    convenio = str(dados.get('convenio', '')).strip().zfill(9)[:9]
-    cobranca_cedente = '0014'
-    carteira = str(dados.get('carteira', '0')).strip().zfill(2)[:2]
-    variacao = str(dados.get('variacao', '0')).strip().zfill(3)[:3]
-    brancos_conv = '  '
-    bloco_convenio = convenio + cobranca_cedente + carteira + variacao + brancos_conv # 033-052 (20)
+    convenio = only_digits(dados.get('convenio')).zfill(9)[:9]
+    carteira = only_digits(dados.get('carteira'))
+    carteira = carteira.zfill(2) if carteira else "00"
 
-    agencia = str(dados.get('agencia', '')).strip().zfill(5)[:5]                    # 053-057 (5)
-    dv_agencia = str(dados.get('dv_agencia', '')).strip().upper().ljust(1)[:1]      # 058-058 (1)
-    conta = str(dados.get('conta', '')).strip().zfill(12)[:12]                      # 059-070 (12)
-    dv_conta = str(dados.get('dv_conta', '')).strip().upper().ljust(1)[:1]          # 071-071 (1)
-    dv_ag_conta = ' '                                                               # 072-072 (1)
+    variacao = only_digits(dados.get('variacao'))
+    variacao = variacao.zfill(3) if variacao else "000"
 
-    nome_empresa = str(dados.get('razao_social', '')).strip().upper().ljust(30)[:30]# 073-102 (30)
-    nome_banco = 'BANCO DO BRASIL S.A.'.ljust(30)[:30]                              # 103-132 (30)
-    brancos2 = ' ' * 10                                                             # 133-142 (10)
-    cod_remessa = '1'                                                               # 143-143 (1)
-    data_geracao = datetime.now().strftime("%d%m%Y")                                # 144-151 (8)
-    hora_geracao = datetime.now().strftime("%H%M%S")                                # 152-157 (6)
-    nsa_str = str(nsa).zfill(6)[:6]                                                 # 158-163 (6)
-    versao_layout = '083'                                                           # 164-166 (3)
-    densidade = '00000'                                                             # 167-171 (5)
-    reservado_banco = ' ' * 20                                                      # 172-191 (20)
-    reservado_empresa = ' ' * 20                                                    # 192-211 (20)
-    brancos3 = ' ' * 29                                                             # 212-240 (29)
+    bloco_convenio = convenio + "0014" + carteira + variacao + "  "
 
-    # 2. Montagem final
-    linha = (banco + lote + registro + brancos1 + tipo_inscricao + cnpj + bloco_convenio + 
-             agencia + dv_agencia + conta + dv_conta + dv_ag_conta + nome_empresa + 
-             nome_banco + brancos2 + cod_remessa + data_geracao + hora_geracao + 
-             nsa_str + versao_layout + densidade + reservado_banco + reservado_empresa + brancos3)
+    linha = (
+        "001" +
+        "0000" +
+        "0" +
+        " " * 9 +
+        "2" +
+        fmt_num(dados.get('cnpj'), 14) +
+        bloco_convenio +
+        fmt_num(dados.get('agencia'), 5) +
+        fmt_alfa(dados.get('dv_agencia'), 1) +
+        fmt_num(dados.get('conta'), 12) +
+        fmt_alfa(dados.get('dv_conta'), 1) +
+        " " +
+        fmt_alfa(dados.get('razao_social'), 30) +
+        fmt_alfa("BANCO DO BRASIL S.A.", 30) +
+        " " * 10 +
+        "1" +
+        datetime.now().strftime("%d%m%Y") +
+        datetime.now().strftime("%H%M%S") +
+        str(nsa).zfill(6) +
+        "083" +
+        "00000" +
+        " " * 20 +
+        " " * 20 +
+        " " * 29
+    )
 
     return linha.ljust(240)[:240]
 
-from datetime import datetime
+# ===============================
+# HEADER LOTE
+# ===============================
 
-def header_lote(dados, num_lote, nsa):
-    # 1. Tratamento de dados com tamanhos EXATOS travados (Layout 042 BB)
-    banco = '001'                                                                   # 001-003 (3)
-    lote = str(num_lote).zfill(4)[:4]                                               # 004-007 (4)
-    registro = '1'                                                                  # 008-008 (1)
-    operacao = 'R'                                                                  # 009-009 (1)
-    servico = '01'                                                                  # 010-011 (2)
-    brancos1 = '  '                                                                 # 012-013 (2)
-    versao_layout = '042'                                                           # 014-016 (3)
-    brancos2 = ' '                                                                  # 017-017 (1)
+def header_lote(dados, lote, nsa):
 
-    cnpj_raw = str(dados.get('cnpj', '')).replace('.', '').replace('/', '').replace('-', '')
-    tipo_inscricao = '2' if len(cnpj_raw) > 11 else '1'                             # 018-018 (1)
-    cnpj = cnpj_raw.zfill(15)[:15]                                                  # 019-033 (15)
+    convenio = only_digits(dados.get('convenio')).zfill(9)[:9]
 
-    # Bloco Convênio BB (Exatas 20 posições: 34 a 53)
-    convenio = str(dados.get('convenio', '')).strip().zfill(9)[:9]
-    cobranca_cedente = '0014'
-    carteira = str(dados.get('carteira', '0')).strip().zfill(2)[:2]
-    variacao = str(dados.get('variacao', '0')).strip().zfill(3)[:3]
-    brancos_conv = '  '
-    bloco_convenio = convenio + cobranca_cedente + carteira + variacao + brancos_conv 
+    carteira = only_digits(dados.get('carteira'))
+    carteira = carteira.zfill(2) if carteira else "00"
 
-    agencia = str(dados.get('agencia', '')).strip().zfill(5)[:5]                    # 054-058 (5)
-    dv_agencia = str(dados.get('dv_agencia', '')).strip().upper().ljust(1)[:1]      # 059-059 (1)
-    conta = str(dados.get('conta', '')).strip().zfill(12)[:12]                      # 060-071 (12)
-    dv_conta = str(dados.get('dv_conta', '')).strip().upper().ljust(1)[:1]          # 072-072 (1)
-    dv_ag_conta = ' '                                                               # 073-073 (1)
+    variacao = only_digits(dados.get('variacao'))
+    variacao = variacao.zfill(3) if variacao else "000"
 
-    nome_empresa = str(dados.get('razao_social', '')).strip().upper().ljust(30)[:30]# 074-103 (30)
-    mensagem1 = ' ' * 40                                                            # 104-143 (40)
-    mensagem2 = ' ' * 40                                                            # 144-183 (40)
-    nsa_str = str(nsa).zfill(8)[:8]                                                 # 184-191 (8)
-    data_geracao = datetime.now().strftime("%d%m%Y")                                # 192-199 (8)
-    data_credito = '00000000'                                                       # 200-207 (8)
-    brancos3 = ' ' * 33                                                             # 208-240 (33)
+    bloco_convenio = convenio + "0014" + carteira + variacao + "  "
 
-    # 2. Montagem final
-    linha = (banco + lote + registro + operacao + servico + brancos1 + versao_layout + 
-             brancos2 + tipo_inscricao + cnpj + bloco_convenio + agencia + dv_agencia + 
-             conta + dv_conta + dv_ag_conta + nome_empresa + mensagem1 + mensagem2 + 
-             nsa_str + data_geracao + data_credito + brancos3)
+    linha = (
+        "001" +
+        str(lote).zfill(4) +
+        "1" +
+        "R" +
+        "01" +
+        "  " +
+        "042" +
+        " " +
+        "2" +
+        fmt_num(dados.get('cnpj'), 15) +
+        bloco_convenio +
+        fmt_num(dados.get('agencia'), 5) +
+        fmt_alfa(dados.get('dv_agencia'), 1) +
+        fmt_num(dados.get('conta'), 12) +
+        fmt_alfa(dados.get('dv_conta'), 1) +
+        " " +
+        fmt_alfa(dados.get('razao_social'), 30) +
+        " " * 40 +
+        " " * 40 +
+        str(nsa).zfill(8) +
+        datetime.now().strftime("%d%m%Y") +
+        "00000000" +
+        " " * 33
+    )
 
     return linha.ljust(240)[:240]
 
-def segmento_p(row, lote, seq, dados_bancarios, colunas_map, cod_instrucao, data_vencimento_lote):
-    # 1. Tratamento de dados
-    banco = '001'                                                                   # 001-003 (3)
-    lote_str = str(lote).zfill(4)[:4]                                               # 004-007 (4)
-    registro = '3'                                                                  # 008-008 (1)
-    seq_str = str(seq).zfill(5)[:5]                                                 # 009-013 (5)
-    segmento = 'P'                                                                  # 014-014 (1)
-    brancos1 = ' '                                                                  # 015-015 (1)
-    movimento = str(cod_instrucao).zfill(2)[:2]                                     # 016-017 (2)
+# ===============================
+# SEGMENTO P
+# ===============================
 
-    agencia = str(dados_bancarios.get('agencia', '')).strip().zfill(5)[:5]          # 018-022 (5)
-    dv_agencia = str(dados_bancarios.get('dv_agencia', '')).strip().upper().ljust(1)[:1] # 023-023 (1)
-    conta = str(dados_bancarios.get('conta', '')).strip().zfill(12)[:12]            # 024-035 (12)
-    dv_conta = str(dados_bancarios.get('dv_conta', '')).strip().upper().ljust(1)[:1]# 036-036 (1)
-    dv_ag_conta = ' '                                                               # 037-037 (1)
+def segmento_p(row, lote, seq, dados, colunas_map, cod_instrucao, nova_data):
 
-    # Nosso Número (BB exige 20 posições alinhadas à esquerda)
-    nosso_numero_planilha = str(row.get(colunas_map['nosso_numero'], '')).strip().replace('.0', '')
-    nosso_numero = nosso_numero_planilha.ljust(20)[:20]                             # 038-057 (20)
+    nosso_numero_raw = str(row.get(colunas_map['nn'], '')).replace(".0", "")
+    nn = only_digits(nosso_numero_raw).zfill(17)[:17]
+    nosso_numero = nn.ljust(20)
 
-    carteira = str(dados_bancarios.get('carteira', '0')).strip().zfill(1)[:1]       # 058-058 (1)
-    cadastramento = '1' # 1=Com Registro                                            # 059-059 (1)
-    documento = '2' # 2=Escritural                                                  # 060-060 (1)
-    emissao_bloqueto = '2' # 2=Cliente Emite                                        # 061-061 (1)
-    distribuicao = '2' # 2=Cliente Distribui                                        # 062-062 (1)
+    valor = fmt_money(row.get(colunas_map['valor'], 0), 15)
 
-    num_doc = str(row.get(colunas_map['numero_documento'], '')).strip().replace('.0', '').ljust(15)[:15] # 063-077 (15)
-
-    # Data de Vencimento
-    if isinstance(data_vencimento_lote, datetime):
-        vencimento = data_vencimento_lote.strftime("%d%m%Y")
+    if nova_data:
+        venc = pd.to_datetime(nova_data).strftime("%d%m%Y")
     else:
-        vencimento = datetime.strptime(str(data_vencimento_lote)[:10], "%Y-%m-%d").strftime("%d%m%Y") # 078-085 (8)
+        venc = fmt_date(row.get(colunas_map['venc']))
 
-    # Valor Nominal
-    valor_str = str(row.get(colunas_map['valor'], '0')).replace(',', '.')
-    try:
-        valor_float = float(valor_str)
-    except:
-        valor_float = 0.0
-    valor = f"{int(round(valor_float * 100)):015d}"[:15]                            # 086-100 (15)
-
-    agencia_cobradora = '00000'                                                     # 101-105 (5)
-    dv_agencia_cobradora = ' '                                                      # 106-106 (1)
-    especie_titulo = '02' # 02=Duplicata Mercantil                                  # 107-108 (2)
-    aceite = 'N'                                                                    # 109-109 (1)
-    data_emissao = datetime.now().strftime("%d%m%Y")                                # 110-117 (8)
-
-    # Juros, Descontos, IOF, Abatimento (Zerados por padrão)
-    cod_juros = '3' # 3=Isento                                                      # 118-118 (1)
-    data_juros = '00000000'                                                         # 119-126 (8)
-    juros = '0' * 15                                                                # 127-141 (15)
-    cod_desc = '0'                                                                  # 142-142 (1)
-    data_desc = '00000000'                                                          # 143-150 (8)
-    desc = '0' * 15                                                                 # 151-165 (15)
-    iof = '0' * 15                                                                  # 166-180 (15)
-    abatimento = '0' * 15                                                           # 181-195 (15)
-
-    id_titulo_empresa = num_doc.ljust(25)[:25]                                      # 196-220 (25)
-    cod_protesto = '3' # 3=Não protestar                                            # 221-221 (1)
-    dias_protesto = '00'                                                            # 222-223 (2)
-    cod_baixa = '0'                                                                 # 224-224 (1)
-    dias_baixa = '000'                                                              # 225-227 (3)
-    moeda = '09' # 09=Real                                                          # 228-229 (2)
-    contrato = '0' * 10                                                             # 230-239 (10)
-    brancos2 = ' '                                                                  # 240-240 (1)
-
-    # 2. Montagem final
-    linha = (banco + lote_str + registro + seq_str + segmento + brancos1 + movimento + 
-             agencia + dv_agencia + conta + dv_conta + dv_ag_conta + nosso_numero + 
-             carteira + cadastramento + documento + emissao_bloqueto + distribuicao + 
-             num_doc + vencimento + valor + agencia_cobradora + dv_agencia_cobradora + 
-             especie_titulo + aceite + data_emissao + cod_juros + data_juros + juros + 
-             cod_desc + data_desc + desc + iof + abatimento + id_titulo_empresa + 
-             cod_protesto + dias_protesto + cod_baixa + dias_baixa + moeda + contrato + brancos2)
-
-    return linha.ljust(240)[:240]
-
-def segmento_q(row, lote, seq, colunas_map, cod_instrucao):
-    # 1. Tratamento de dados
-    banco = '001'                                                                   # 001-003 (3)
-    lote_str = str(lote).zfill(4)[:4]                                               # 004-007 (4)
-    registro = '3'                                                                  # 008-008 (1)
-    seq_str = str(seq).zfill(5)[:5]                                                 # 009-013 (5)
-    segmento = 'Q'                                                                  # 014-014 (1)
-    brancos1 = ' '                                                                  # 015-015 (1)
-    movimento = str(cod_instrucao).zfill(2)[:2]                                     # 016-017 (2)
-
-    # Dados do Pagador (Cliente)
-    cpf_cnpj_raw = str(row.get("cnpj_cpf", "")).strip().replace(".", "").replace("/", "").replace("-", "")
-    tipo_inscricao = '2' if len(cpf_cnpj_raw) > 11 else '1'                         # 018-018 (1)
-    cpf_cnpj = cpf_cnpj_raw.zfill(15)[:15]                                          # 019-033 (15)
-
-    nome = str(row.get("nome", "")).strip().upper().ljust(40)[:40]                  # 034-073 (40)
-    endereco = str(row.get("endereco", "")).strip().upper().ljust(40)[:40]          # 074-113 (40)
-    bairro = str(row.get("bairro", "")).strip().upper().ljust(15)[:15]              # 114-128 (15)
-
-    cep_raw = str(row.get("cep", "")).strip().replace("-", "").replace(".", "")
-    cep = cep_raw.zfill(8)[:8]
-    cep_prefixo = cep[:5].ljust(5, '0')                                             # 129-133 (5)
-    cep_sufixo = cep[5:8].ljust(3, '0')                                             # 134-136 (3)
-
-    cidade = str(row.get("cidade", "")).strip().upper().ljust(15)[:15]              # 137-151 (15)
-    uf = str(row.get("uf", "")).strip().upper().ljust(2)[:2]                        # 152-153 (2)
-
-    # Sacador/Avalista (Não utilizado por padrão)
-    tipo_insc_sacador = '0'                                                         # 154-154 (1)
-    insc_sacador = '0' * 15                                                         # 155-169 (15)
-    nome_sacador = ' ' * 40                                                         # 170-209 (40)
-
-    banco_corresp = '000'                                                           # 210-212 (3)
-    nosso_num_corresp = ' ' * 20                                                    # 213-232 (20)
-    brancos2 = ' ' * 8                                                              # 233-240 (8)
-
-    # 2. Montagem final
-    linha = (banco + lote_str + registro + seq_str + segmento + brancos1 + movimento + 
-             tipo_inscricao + cpf_cnpj + nome + endereco + bairro + cep_prefixo + 
-             cep_sufixo + cidade + uf + tipo_insc_sacador + insc_sacador + 
-             nome_sacador + banco_corresp + nosso_num_corresp + brancos2)
+    linha = (
+        "001" +
+        str(lote).zfill(4) +
+        "3" +
+        str(seq).zfill(5) +
+        "P" +
+        " " +
+        str(cod_instrucao).zfill(2) +
+        fmt_num(dados.get('agencia'), 5) +
+        fmt_alfa(dados.get('dv_agencia'), 1) +
+        fmt_num(dados.get('conta'), 12) +
+        fmt_alfa(dados.get('dv_conta'), 1) +
+        " " +
+        nosso_numero +
+        fmt_num(dados.get('carteira'), 1) +
+        "1" +
+        "2" +
+        "2" +
+        "2" +
+        fmt_alfa(row.get(colunas_map['doc']), 15) +
+        venc +
+        valor +
+        "00000" +
+        " " +
+        "02" +
+        "N" +
+        datetime.now().strftime("%d%m%Y") +
+        "3" +
+        "00000000" +
+        "0"*15 +
+        "0" +
+        "00000000" +
+        "0"*15 +
+        "0"*15 +
+        "0"*15 +
+        fmt_alfa(row.get(colunas_map['doc']), 25) +
+        "3" +
+        "00" +
+        "0" +
+        "000" +
+        "09" +
+        "0"*10 +
+        " "
+    )
 
     return linha.ljust(240)[:240]
 
-def trailer_lote(lote, qtd_registros):
-    return fmt_num("001", 3) + fmt_num(lote, 4) + fmt_num("5", 1) + fmt_alfa("", 9) + fmt_num(qtd_registros, 6) + fmt_num("0", 6) + fmt_alfa("", 205)
+# ===============================
+# SEGMENTO Q
+# ===============================
 
-def trailer_arquivo(qtd_lotes, qtd_registros):
-    return fmt_num("001", 3) + fmt_num("9999", 4) + fmt_num("9", 1) + fmt_alfa("", 9) + fmt_num(qtd_lotes, 6) + fmt_num(qtd_registros, 6) + fmt_num("0", 6) + fmt_alfa("", 205)
+def segmento_q(row, lote, seq):
 
+    cpf = only_digits(row.get("cnpj_cpf")).zfill(15)
+
+    linha = (
+        "001" +
+        str(lote).zfill(4) +
+        "3" +
+        str(seq).zfill(5) +
+        "Q" +
+        " " +
+        "01" +
+        ("2" if len(cpf) > 11 else "1") +
+        cpf +
+        fmt_alfa(row.get("nome"), 40) +
+        fmt_alfa(row.get("endereco"), 40) +
+        fmt_alfa(row.get("bairro"), 15) +
+        fmt_num(row.get("cep"), 5) +
+        fmt_num(row.get("cep"), 8)[5:] +
+        fmt_alfa(row.get("cidade"), 15) +
+        fmt_alfa(row.get("uf"), 2) +
+        "0" +
+        "0"*15 +
+        " "*40 +
+        "000" +
+        " "*20 +
+        " "*8
+    )
+
+    return linha.ljust(240)[:240]
+
+# ===============================
+# TRAILERS
+# ===============================
+
+def trailer_lote(lote, qtd):
+    return "001" + str(lote).zfill(4) + "5" + " "*9 + str(qtd).zfill(6) + "000000" + " "*205
+
+def trailer_arquivo(qtd_lotes, qtd_reg):
+    return "001" + "9999" + "9" + " "*9 + str(qtd_lotes).zfill(6) + str(qtd_reg).zfill(6) + "000000" + " "*205
     
 # ==========================================
 # TELA DE LOGIN E CADASTRO
