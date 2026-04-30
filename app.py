@@ -579,11 +579,86 @@ if st.session_state.user:
                     st.success("Convênio cadastrado!")
                     st.rerun()
 
-        st.write("### Convênios Cadastrados")
-        resposta_conv = supabase.table("convenios").select("*").eq("user_id", st.session_state.user.id).execute()
-        df_convenios = pd.DataFrame(resposta_conv.data)
+    st.divider()
+    st.write("### Convênios Cadastrados")
 
-        if not df_convenios.empty:
-            st.dataframe(df_convenios.drop(columns=['id', 'user_id', 'created_at']), use_container_width=True)
-        else:
-            st.info("Nenhum convênio cadastrado ainda.")
+    # Busca os convênios no banco
+    resposta_conv = supabase.table("convenios").select("*").eq("user_id", st.session_state.user.id).execute()
+    df_convenios = pd.DataFrame(resposta_conv.data)
+
+    if not df_convenios.empty:
+        # Mostra a tabela geral
+        st.dataframe(df_convenios.drop(columns=['id', 'user_id', 'created_at']), use_container_width=True)
+
+        # --- MÉTODO À PROVA DE FALHAS (Dicionário de IDs) ---
+        mapa_convenios = {}
+        for index, row in df_convenios.iterrows():
+            # Cria um texto amigável para o selectbox
+            texto_exibicao = f"{row['razao_social']} (Ag: {row['agencia']}-{row['dv_agencia']} | CC: {row['conta']}-{row['dv_conta']})"
+            mapa_convenios[texto_exibicao] = row['id']
+
+        opcoes_convenios = list(mapa_convenios.keys())
+
+        # Cria abas para organizar a edição e a exclusão
+        aba_editar_conv, aba_excluir_conv = st.tabs(["✏️ Editar Convênio", "🗑️ Excluir Convênio"])
+
+        # --- ABA: EDITAR CONVÊNIO ---
+        with aba_editar_conv:
+            convenio_selecionado = st.selectbox("Selecione o convênio que deseja alterar:", [""] + opcoes_convenios, key="sel_edit_conv")
+
+            if convenio_selecionado:
+                # Pega o ID real direto do dicionário
+                id_real_conv = mapa_convenios[convenio_selecionado]
+                dados_conv = df_convenios[df_convenios['id'] == id_real_conv].iloc[0]
+
+                with st.form("form_editar_convenio"):
+                    col1, col2 = st.columns(2)
+                    edit_cnpj_conv = col1.text_input("CNPJ", value=str(dados_conv.get('cnpj', '')))
+                    edit_razao_conv = col2.text_input("Razão Social", value=str(dados_conv.get('razao_social', '')))
+
+                    col3, col4, col5, col6 = st.columns(4)
+                    edit_agencia = col3.text_input("Agência (sem dígito)", value=str(dados_conv.get('agencia', '')))
+                    edit_dv_agencia = col4.text_input("Dígito Agência", value=str(dados_conv.get('dv_agencia', '')))
+                    edit_conta = col5.text_input("Conta (sem dígito)", value=str(dados_conv.get('conta', '')))
+                    edit_dv_conta = col6.text_input("Dígito Conta", value=str(dados_conv.get('dv_conta', '')))
+
+                    col7, col8, col9 = st.columns(3)
+                    edit_num_convenio = col7.text_input("Número do Convênio", value=str(dados_conv.get('convenio', '')))
+                    edit_carteira = col8.text_input("Carteira", value=str(dados_conv.get('carteira', '')))
+                    edit_variacao = col9.text_input("Variação da Carteira", value=str(dados_conv.get('variacao', '')))
+
+                    if st.form_submit_button("💾 Salvar Alterações do Convênio", type="primary"):
+                        try:
+                            supabase.table("convenios").update({
+                                "cnpj": edit_cnpj_conv,
+                                "razao_social": edit_razao_conv,
+                                "agencia": edit_agencia,
+                                "dv_agencia": edit_dv_agencia,
+                                "conta": edit_conta,
+                                "dv_conta": edit_dv_conta,
+                                "convenio": edit_num_convenio,
+                                "carteira": edit_carteira,
+                                "variacao": edit_variacao
+                            }).eq("id", id_real_conv).execute()
+                            st.success("Convênio atualizado com sucesso!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao atualizar convênio: {e}")
+
+        # --- ABA: EXCLUIR CONVÊNIO ---
+        with aba_excluir_conv:
+            st.write("Selecione o convênio que deseja remover permanentemente.")
+            convenio_para_excluir = st.selectbox("Convênio a ser excluído:", [""] + opcoes_convenios, key="sel_del_conv")
+
+            if convenio_para_excluir:
+                st.warning(f"⚠️ Você está prestes a excluir o convênio **{convenio_para_excluir}**. Essa ação não pode ser desfeita.")
+                if st.button("🚨 Confirmar Exclusão do Convênio", type="primary"):
+                    try:
+                        id_real_del = mapa_convenios[convenio_para_excluir]
+                        supabase.table("convenios").delete().eq("id", id_real_del).execute()
+                        st.success("Convênio excluído com sucesso!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao excluir convênio: {e}")
+    else:
+        st.info("Nenhum convênio cadastrado ainda.")
