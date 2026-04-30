@@ -186,7 +186,7 @@ def header_lote(dados, num_lote, nsa):
              conta + dv_conta + dv_ag_conta + nome_empresa + mensagem1 + mensagem2 + 
              nsa_str + data_geracao + data_credito + brancos3)
 
-    return linha.ljust(240)[:240]  
+    return linha.ljust(240)[:240] 
     
 def trailer_lote(lote, qtd_registros):
     return fmt_num("001", 3) + fmt_num(lote, 4) + fmt_num("5", 1) + fmt_alfa("", 9) + fmt_num(qtd_registros, 6) + fmt_num("0", 6) + fmt_alfa("", 205)
