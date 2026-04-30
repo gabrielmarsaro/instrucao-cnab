@@ -193,25 +193,153 @@ aba_gerador, aba_clientes, aba_convenios = st.tabs(["Gerar Remessa", "Meus Clien
 # --- ABA: MEUS CLIENTES ---
 with aba_clientes:
     st.header("Gestão de Clientes")
-    st.write("Em breve: Edição direta na tabela sincronizada com a nuvem.")
+
     resposta_cli = supabase.table("clientes").select("*").eq("user_id", st.session_state.user.id).execute()
     df_clientes = pd.DataFrame(resposta_cli.data)
+
     if not df_clientes.empty:
-        st.dataframe(df_clientes.drop(columns=['id', 'user_id', 'created_at']))
+        # Dicionário seguro mapeando texto da tela para o ID real do banco
+        mapa_clientes = {}
+        for index, row in df_clientes.iterrows():
+            texto_exibicao = f"{row.get('nome', 'Sem Nome')} (Cód: {row.get('id_cliente_planilha', 'S/C')})"
+            mapa_clientes[texto_exibicao] = row['id']
+
+        opcoes_clientes = list(mapa_clientes.keys())
+
+        tab_vis_cli, tab_edit_cli, tab_del_cli = st.tabs(["👁️ Visualizar", "✏️ Editar", "🗑️ Excluir em Lote"])
+
+        with tab_vis_cli:
+            st.dataframe(df_clientes.drop(columns=['id', 'user_id', 'created_at']), use_container_width=True)
+
+        with tab_edit_cli:
+            cliente_selecionado = st.selectbox("Selecione o cliente para editar:", [""] + opcoes_clientes)
+            if cliente_selecionado:
+                id_real = mapa_clientes[cliente_selecionado]
+                dados_cli = df_clientes[df_clientes['id'] == id_real].iloc[0]
+
+                with st.form("form_edit_cli"):
+                    col1, col2 = st.columns(2)
+                    edit_cod = col1.text_input("Código na Planilha", value=str(dados_cli.get('id_cliente_planilha', '')))
+                    edit_cnpj = col2.text_input("CNPJ/CPF", value=str(dados_cli.get('cnpj_cpf', '')))
+
+                    edit_nome = st.text_input("Nome / Razão Social", value=str(dados_cli.get('nome', '')))
+                    edit_end = st.text_input("Endereço", value=str(dados_cli.get('endereco', '')))
+
+                    col3, col4, col5, col6 = st.columns(4)
+                    edit_bairro = col3.text_input("Bairro", value=str(dados_cli.get('bairro', '')))
+                    edit_cep = col4.text_input("CEP", value=str(dados_cli.get('cep', '')))
+                    edit_cidade = col5.text_input("Cidade", value=str(dados_cli.get('cidade', '')))
+                    edit_uf = col6.text_input("UF", value=str(dados_cli.get('uf', '')))
+
+                    if st.form_submit_button("💾 Salvar Alterações", type="primary"):
+                        try:
+                            supabase.table("clientes").update({
+                                "id_cliente_planilha": edit_cod, "cnpj_cpf": edit_cnpj,
+                                "nome": edit_nome, "endereco": edit_end,
+                                "bairro": edit_bairro, "cep": edit_cep,
+                                "cidade": edit_cidade, "uf": edit_uf
+                            }).eq("id", id_real).execute()
+                            st.success("Cliente atualizado!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro: {e}")
+
+        with tab_del_cli:
+            st.write("Selecione os clientes que deseja apagar:")
+            marcar_todos = st.checkbox("☑️ Selecionar TODOS")
+            clientes_para_excluir = st.multiselect(
+                "Clientes selecionados:", 
+                opcoes_clientes, 
+                default=opcoes_clientes if marcar_todos else None
+            )
+
+            if clientes_para_excluir:
+                st.warning(f"⚠️ Excluindo {len(clientes_para_excluir)} cliente(s).")
+                if st.button("🚨 Confirmar Exclusão", type="primary"):
+                    try:
+                        ids_excluir = [mapa_clientes[c] for c in clientes_para_excluir]
+                        for id_interno in ids_excluir:
+                            supabase.table("clientes").delete().eq("id", id_interno).execute()
+                        st.success("Clientes excluídos!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro: {e}")
     else:
         st.info("Nenhum cliente cadastrado ainda.")
 
 # --- ABA: MEUS CONVÊNIOS ---
 with aba_convenios:
     st.header("Gestão de Convênios")
-    st.write("Em breve: Cadastro e edição de convênios.")
+
     resposta_conv = supabase.table("convenios").select("*").eq("user_id", st.session_state.user.id).execute()
     df_convenios = pd.DataFrame(resposta_conv.data)
+
     if not df_convenios.empty:
-        st.dataframe(df_convenios.drop(columns=['id', 'user_id', 'created_at']))
+        mapa_convenios = {}
+        for index, row in df_convenios.iterrows():
+            texto_exibicao = f"{row.get('razao_social', 'S/N')} (Ag: {row.get('agencia', '')} | CC: {row.get('conta', '')})"
+            mapa_convenios[texto_exibicao] = row['id']
+
+        opcoes_convenios = list(mapa_convenios.keys())
+
+        tab_vis_conv, tab_edit_conv, tab_del_conv = st.tabs(["👁️ Visualizar", "✏️ Editar", "🗑️ Excluir"])
+
+        with tab_vis_conv:
+            st.dataframe(df_convenios.drop(columns=['id', 'user_id', 'created_at']), use_container_width=True)
+
+        with tab_edit_conv:
+            conv_selecionado = st.selectbox("Selecione o convênio para editar:", [""] + opcoes_convenios)
+            if conv_selecionado:
+                id_real_conv = mapa_convenios[conv_selecionado]
+                dados_conv = df_convenios[df_convenios['id'] == id_real_conv].iloc[0]
+
+                with st.form("form_edit_conv"):
+                    col1, col2 = st.columns(2)
+                    edit_cnpj_conv = col1.text_input("CNPJ", value=str(dados_conv.get('cnpj', '')))
+                    edit_razao_conv = col2.text_input("Razão Social", value=str(dados_conv.get('razao_social', '')))
+
+                    col3, col4, col5, col6 = st.columns(4)
+                    edit_agencia = col3.text_input("Agência", value=str(dados_conv.get('agencia', '')))
+                    edit_dv_agencia = col4.text_input("DV Agência", value=str(dados_conv.get('dv_agencia', '')))
+                    edit_conta = col5.text_input("Conta", value=str(dados_conv.get('conta', '')))
+                    edit_dv_conta = col6.text_input("DV Conta", value=str(dados_conv.get('dv_conta', '')))
+
+                    col7, col8, col9 = st.columns(3)
+                    edit_convenio = col7.text_input("Convênio", value=str(dados_conv.get('convenio', '')))
+                    edit_carteira = col8.text_input("Carteira", value=str(dados_conv.get('carteira', '')))
+                    edit_variacao = col9.text_input("Variação", value=str(dados_conv.get('variacao', '')))
+
+                    if st.form_submit_button("💾 Salvar Convênio", type="primary"):
+                        try:
+                            supabase.table("convenios").update({
+                                "cnpj": edit_cnpj_conv, "razao_social": edit_razao_conv,
+                                "agencia": edit_agencia, "dv_agencia": edit_dv_agencia,
+                                "conta": edit_conta, "dv_conta": edit_dv_conta,
+                                "convenio": edit_convenio, "carteira": edit_carteira,
+                                "variacao": edit_variacao
+                            }).eq("id", id_real_conv).execute()
+                            st.success("Convênio atualizado!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro: {e}")
+
+        with tab_del_conv:
+            st.write("Selecione o convênio que deseja remover:")
+            conv_para_excluir = st.selectbox("Convênio a excluir:", [""] + opcoes_convenios, key="del_conv")
+
+            if conv_para_excluir:
+                st.warning(f"⚠️ Excluindo: {conv_para_excluir}")
+                if st.button("🚨 Confirmar Exclusão do Convênio", type="primary"):
+                    try:
+                        id_real_del = mapa_convenios[conv_para_excluir]
+                        supabase.table("convenios").delete().eq("id", id_real_del).execute()
+                        st.success("Convênio excluído!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro: {e}")
     else:
         st.info("Nenhum convênio cadastrado ainda.")
-
+        
 # --- ABA: GERADOR ---
 with aba_gerador:
     col1, col2 = st.columns(2)
