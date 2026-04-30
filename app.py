@@ -251,11 +251,15 @@ with aba_gerador:
         for i, lote in enumerate(st.session_state.lotes):
             st.write(f"**Lote {i+1}:** {lote['instrucao']} - Arquivo: {lote['nome_arquivo']} ({len(lote['df'])} boletos)")
 
-        if st.button("🚀 GERAR ARQUIVO REMESSA FINAL", type="primary"):
+    if st.button("🚀 GERAR ARQUIVO REMESSA FINAL", type="primary"):
             try:
-                # Pega os dados do convênio selecionado
+                # 1. Pega os dados do convênio selecionado
                 dados_bancarios = df_convenios[df_convenios['razao_social'] == convenio_selecionado].iloc[0].to_dict()
                 nsa = 1 # Em um sistema real, buscaríamos o último NSA do banco
+
+                # 2. Busca todos os clientes do usuário no banco de dados para fazer o cruzamento
+                resposta_cli = supabase.table("clientes").select("*").eq("user_id", st.session_state.user.id).execute()
+                df_clientes_banco = pd.DataFrame(resposta_cli.data)
 
                 linhas = []
                 linhas.append(header_arquivo(dados_bancarios, nsa))
@@ -284,11 +288,33 @@ with aba_gerador:
 
                     seq_reg = 1
                     for index, row in df_boletos.iterrows():
-                        # Aqui faríamos o merge com df_clientes do banco de dados
-                        # Para o exemplo, passamos a linha direto (assumindo que tem os dados)
-                        linhas.append(segmento_p(row, numero_lote, seq_reg, dados_bancarios, colunas_map, cod_instrucao, lote['nova_data']))
+                        row_dict = row.to_dict()
+
+                        # --- INÍCIO DO CRUZAMENTO DE DADOS ---
+                        # Pega o código do cliente na linha atual da planilha de boletos
+                        cod_cliente_boleto = normalizar_id_cliente(row_dict.get(colunas_map['cliente'], ''))
+
+                        # Procura esse código na tabela de clientes do banco de dados
+                        if not df_clientes_banco.empty:
+                            cliente_match = df_clientes_banco[df_clientes_banco['id_cliente_planilha'].astype(str) == cod_cliente_boleto]
+
+                            if not cliente_match.empty:
+                                dados_cli = cliente_match.iloc[0].to_dict()
+                                # Injeta os dados do banco de dados para dentro da linha que vai gerar o CNAB
+                                row_dict['cnpj_cpf'] = dados_cli.get('cnpj_cpf', '')
+                                row_dict['nome'] = dados_cli.get('nome', '')
+                                row_dict['endereco'] = dados_cli.get('endereco', '')
+                                row_dict['bairro'] = dados_cli.get('bairro', '')
+                                row_dict['cep'] = dados_cli.get('cep', '')
+                                row_dict['cidade'] = dados_cli.get('cidade', '')
+                                row_dict['uf'] = dados_cli.get('uf', '')
+                            else:
+                                st.warning(f"⚠️ Cliente Cód: {cod_cliente_boleto} não encontrado no banco de dados. O Segmento Q ficará sem dados.")
+                        # --- FIM DO CRUZAMENTO ---
+
+                        linhas.append(segmento_p(row_dict, numero_lote, seq_reg, dados_bancarios, colunas_map, cod_instrucao, lote['nova_data']))
                         seq_reg += 1
-                        linhas.append(segmento_q(row, numero_lote, seq_reg, colunas_map, cod_instrucao))
+                        linhas.append(segmento_q(row_dict, numero_lote, seq_reg, colunas_map, cod_instrucao))
                         seq_reg += 1
 
                     linhas.append(trailer_lote(numero_lote, seq_reg + 1))
