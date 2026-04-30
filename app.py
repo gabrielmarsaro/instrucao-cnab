@@ -405,57 +405,160 @@ if st.session_state.user:
             else:
                 st.info("Nenhum lote adicionado ainda. Você pode adicionar lotes acima ou gerar a remessa vazia (apenas header/trailer).")
 
-            if st.button("🚀 GERAR ARQUIVO REMESSA FINAL", type="primary"):
-                try:
-                    # 1. Define quais lotes processar (Carrinho ou Geração Imediata)
-                    lotes_para_processar = list(st.session_state.lotes)
+    if st.button("🚀 GERAR ARQUIVO REMESSA FINAL", type="primary"):
+    try:
+        # ===============================
+        # DEFINE LOTES
+        # ===============================
+        lotes_para_processar = list(st.session_state.lotes)
 
-                    if not lotes_para_processar:
-                        if arquivo_excel is not None:
-                            # Geração imediata: pega o arquivo que está na tela
-                            df_imediato = pd.read_excel(arquivo_excel)
-                            lotes_para_processar.append({
-                                'df': df_imediato,
-                                'instrucao': instrucao,
-                                'nova_data': nova_data,
-                                'nome_arquivo': arquivo_excel.name
-                            })
-                        else:
-                            st.warning("⚠️ Adicione um lote ao carrinho ou selecione uma planilha para gerar a remessa.")
-                            st.stop() # Para a execução aqui se não tiver nada
+        if not lotes_para_processar:
+            if arquivo_excel is not None:
+                df_imediato = pd.read_excel(arquivo_excel)
+                lotes_para_processar.append({
+                    'df': df_imediato,
+                    'instrucao': instrucao,
+                    'nova_data': nova_data,
+                    'nome_arquivo': arquivo_excel.name
+                })
+            else:
+                st.warning("⚠️ Adicione um lote ou selecione uma planilha.")
+                st.stop()
 
-                    # 2. Inicia a geração do arquivo
-    dados_bancarios = df_convenios[
-        df_convenios['razao_social'] == convenio_selecionado
-].iloc[0].to_dict()
+        # ===============================
+        # DADOS DO CONVÊNIO
+        # ===============================
+        dados_bancarios = df_convenios[
+            df_convenios['razao_social'] == convenio_selecionado
+        ].iloc[0].to_dict()
 
-# ===============================
-# VALIDAÇÃO DOS DADOS DO CONVÊNIO
-# ===============================
+        # ===============================
+        # VALIDAÇÃO (CORRETA)
+        # ===============================
+        if not str(dados_bancarios.get('convenio', '')).isdigit():
+            st.error("❌ Convênio inválido")
+            st.stop()
 
-def only_digits(valor):
-    return str(valor).isdigit()
+        if not str(dados_bancarios.get('carteira', '')).isdigit():
+            st.error("❌ Carteira inválida")
+            st.stop()
 
-if not only_digits(dados_bancarios.get('convenio')):
-    st.error("❌ Convênio inválido ou não preenchido")
-    st.stop()
+        if not str(dados_bancarios.get('variacao', '')).isdigit():
+            st.error("❌ Variação inválida")
+            st.stop()
 
-if not only_digits(dados_bancarios.get('carteira')):
-    st.error("❌ Carteira não preenchida no convênio")
-    st.stop()
+        if not str(dados_bancarios.get('agencia', '')).isdigit():
+            st.error("❌ Agência inválida")
+            st.stop()
 
-if not only_digits(dados_bancarios.get('variacao')):
-    st.error("❌ Variação não preenchida no convênio")
-    st.stop()
+        if not str(dados_bancarios.get('conta', '')).isdigit():
+            st.error("❌ Conta inválida")
+            st.stop()
 
-if not only_digits(dados_bancarios.get('agencia')):
-    st.error("❌ Agência não preenchida")
-    st.stop()
+        # ===============================
+        # BUSCA CLIENTES
+        # ===============================
+        resposta_cli = supabase.table("clientes") \
+            .select("*") \
+            .eq("user_id", st.session_state.user.id) \
+            .execute()
 
-if not only_digits(dados_bancarios.get('conta')):
-    st.error("❌ Conta não preenchida")
-    st.stop()
+        df_clientes_bd = pd.DataFrame(resposta_cli.data)
 
+        # ===============================
+        # GERAÇÃO CNAB
+        # ===============================
+        nsa = 1
+        linhas = []
+        linhas.append(header_arquivo(dados_bancarios, nsa))
+
+        total_registros_arquivo = 0
+
+        for i, lote in enumerate(lotes_para_processar):
+            numero_lote = i + 1
+            linhas.append(header_lote(dados_bancarios, numero_lote, nsa))
+
+            df_boletos = lote['df']
+            cod_instrucao = lote['instrucao'].split(" - ")[0].strip()
+
+            colunas_bol_lower = [str(c).strip().lower() for c in df_boletos.columns]
+            df_boletos.columns = colunas_bol_lower
+
+            colunas_map = {
+                'nn': next((c for c in colunas_bol_lower if 'nosso numero' in c or 'nosso_numero' in c), ''),
+                'doc': next((c for c in colunas_bol_lower if 'documento' in c), ''),
+                'venc': next((c for c in colunas_bol_lower if 'vencimento' in c), ''),
+                'valor': next((c for c in colunas_bol_lower if 'corrigido' in c or 'valor' in c), ''),
+                'cliente': next((c for c in colunas_bol_lower if 'cliente' in c or 'nome' in c), '')
+            }
+
+            seq_reg = 1
+
+            for _, row in df_boletos.iterrows():
+                dados_linha = row.to_dict()
+
+                # ===============================
+                # BUSCA CLIENTE NO SUPABASE
+                # ===============================
+                cod_cli = str(dados_linha.get(colunas_map['cliente'], '')).replace(".0", "").strip()
+
+                if not df_clientes_bd.empty:
+                    cli_match = df_clientes_bd[df_clientes_bd['id_cliente_planilha'] == cod_cli]
+
+                    if not cli_match.empty:
+                        cli = cli_match.iloc[0]
+                        dados_linha.update({
+                            'cnpj_cpf': cli.get('cnpj_cpf', ''),
+                            'nome': cli.get('nome', ''),
+                            'endereco': cli.get('endereco', ''),
+                            'bairro': cli.get('bairro', ''),
+                            'cep': cli.get('cep', ''),
+                            'cidade': cli.get('cidade', ''),
+                            'uf': cli.get('uf', '')
+                        })
+                    else:
+                        st.warning(f"Cliente '{cod_cli}' não encontrado")
+
+                linhas.append(segmento_p(
+                    dados_linha, numero_lote, seq_reg,
+                    dados_bancarios, colunas_map,
+                    cod_instrucao, lote['nova_data']
+                ))
+                seq_reg += 1
+
+                linhas.append(segmento_q(
+                    dados_linha, numero_lote, seq_reg
+                ))
+                seq_reg += 1
+
+            linhas.append(trailer_lote(numero_lote, seq_reg + 1))
+            total_registros_arquivo += (seq_reg + 1)
+
+        linhas.append(trailer_arquivo(len(lotes_para_processar), total_registros_arquivo + 2))
+
+        # ===============================
+        # GERAR ARQUIVO
+        # ===============================
+        cnab_bytes = io.BytesIO()
+
+        for linha in linhas:
+            linha = ''.join(c for c in unicodedata.normalize('NFD', linha) if unicodedata.category(c) != 'Mn')
+            linha = linha.ljust(240)[:240] + "\r\n"
+            cnab_bytes.write(linha.encode('ascii', errors='replace'))
+
+        st.success("✅ CNAB gerado com sucesso!")
+
+        st.download_button(
+            label="📥 Baixar CNAB",
+            data=cnab_bytes.getvalue(),
+            file_name="remessa_bb.rem",
+            mime="text/plain"
+        )
+
+        st.session_state.lotes = []
+
+    except Exception as e:
+        st.error(f"Erro ao gerar: {e}")
 # ===============================
 
 nsa = 1 
