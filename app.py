@@ -143,12 +143,13 @@ def segmento_q(row, lote, seq, colunas_map, cod_instrucao):
 # --- Funções de Autenticação ---
 def login(email, password):
     try:
-        res = supabase.auth.sign_in_with_password,({"email": email, "password": password})
+        # Removida a vírgula que estava causando o erro
+        res = supabase.auth.sign_in_with_password({"email": email, "password": password})
         st.session_state.user = res.user
         st.success("Login realizado com sucesso!")
         st.rerun()
     except Exception as e:
-        st.error("Erro no login. Verifique suas credenciais.")
+        st.error(f"Erro no login: {e}")
 
 def sign_up(email, password):
     try:
@@ -156,12 +157,6 @@ def sign_up(email, password):
         st.success("Conta criada! Você já pode fazer login.")
     except Exception as e:
         st.error(f"Erro ao criar conta: {e}")
-
-def logout():
-    supabase.auth.signOut()
-    st.session_state.user = None
-    st.session_state.lotes = []
-    st.rerun()
 
 # --- Tela de Login ---
 if not st.session_state.user:
@@ -178,7 +173,7 @@ if not st.session_state.user:
         email_cad = st.text_input("E-mail", key="cad_email")
         senha_cad = st.text_input("Senha (mín. 6 caracteres)", type="password", key="cad_senha")
         if st.button("Cadastrar"):
-            signup(email_cad, senha_cad)
+            sign_up(email_cad, senha_cad) # Corrigido de signup para sign_up
     st.stop()
 
 # --- Sistema Principal (Logado) ---
