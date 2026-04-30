@@ -425,7 +425,7 @@ if st.session_state.user:
                             st.stop() # Para a execução aqui se não tiver nada
 
                     # 2. Inicia a geração do arquivo
-                   dados_bancarios = df_convenios[
+                dados_bancarios = df_convenios[
     df_convenios['razao_social'] == convenio_selecionado
 ].iloc[0].to_dict()
 
