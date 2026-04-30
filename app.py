@@ -102,67 +102,91 @@ def fmt_conta_bb(dados):
 # FUNÇÕES DE FORMATAÇÃO CNAB 240
 # ==========================================
 def header_arquivo(dados, nsa):
-    # 1. Tratamento de dados
-    cnpj = str(dados.get('cnpj', '')).replace('.', '').replace('/', '').replace('-', '').zfill(14)
+    # 1. Tratamento de dados com tamanhos EXATOS travados
+    banco = '001'                                                                   # Posição 001 a 003 (3)
+    lote = '0000'                                                                   # Posição 004 a 007 (4)
+    registro = '0'                                                                  # Posição 008 a 008 (1)
+    brancos1 = ' ' * 9                                                              # Posição 009 a 017 (9)
+    tipo_inscricao = '2'                                                            # Posição 018 a 018 (1)
+    cnpj = str(dados.get('cnpj', '')).replace('.', '').replace('/', '').replace('-', '').zfill(14)[:14] # Posição 019 a 032 (14)
 
-    # Bloco Convênio (Exatas 20 posições: 9 convênio + 4 fixo + 2 carteira + 3 variação + 2 brancos)
-    num_convenio = str(dados.get('convenio', '')).strip().zfill(9)
+    # Bloco Convênio BB (Exatas 20 posições)
+    convenio = str(dados.get('convenio', '')).strip().zfill(9)[:9]
     cobranca_cedente = '0014'
-    carteira = str(dados.get('carteira', '0')).strip().zfill(2)
-    variacao = str(dados.get('variacao', '0')).strip().zfill(3)
-    bloco_convenio = f"{num_convenio}{cobranca_cedente}{carteira}{variacao}  " # 20 chars
+    carteira = str(dados.get('carteira', '0')).strip().zfill(2)[:2]
+    variacao = str(dados.get('variacao', '0')).strip().zfill(3)[:3]
+    brancos_conv = '  '
+    bloco_convenio = convenio + cobranca_cedente + carteira + variacao + brancos_conv # Posição 033 a 052 (20)
 
-    agencia = str(dados.get('agencia', '')).strip().zfill(5)
-    dv_agencia = str(dados.get('dv_agencia', '')).strip().upper().ljust(1)[:1]
-    conta = str(dados.get('conta', '')).strip().zfill(12)
-    dv_conta = str(dados.get('dv_conta', '')).strip().upper().ljust(1)[:1]
-    dv_ag_conta = ' '
+    agencia = str(dados.get('agencia', '')).strip().zfill(5)[:5]                    # Posição 053 a 057 (5)
+    dv_agencia = str(dados.get('dv_agencia', '')).strip().upper().ljust(1)[:1]      # Posição 058 a 058 (1)
+    conta = str(dados.get('conta', '')).strip().zfill(12)[:12]                      # Posição 059 a 070 (12)
+    dv_conta = str(dados.get('dv_conta', '')).strip().upper().ljust(1)[:1]          # Posição 071 a 071 (1)
+    dv_ag_conta = ' '                                                               # Posição 072 a 072 (1)
 
-    nome_empresa = str(dados.get('razao_social', '')).strip().upper().ljust(30)[:30]
-    nome_banco = 'BANCO DO BRASIL S.A.'.ljust(30)
-    data_geracao = datetime.now().strftime("%d%m%Y")
-    hora_geracao = datetime.now().strftime("%H%M%S")
-    nsa_str = str(nsa).zfill(6)
+    nome_empresa = str(dados.get('razao_social', '')).strip().upper().ljust(30)[:30]# Posição 073 a 102 (30)
+    nome_banco = 'BANCO DO BRASIL S.A.'.ljust(30)[:30]                              # Posição 103 a 132 (30)
+    brancos2 = ' ' * 10                                                             # Posição 133 a 142 (10)
+    cod_remessa = '1'                                                               # Posição 143 a 143 (1)
+    data_geracao = datetime.now().strftime("%d%m%Y")                                # Posição 144 a 151 (8)
+    hora_geracao = datetime.now().strftime("%H%M%S")                                # Posição 152 a 157 (6)
+    nsa_str = str(nsa).zfill(6)[:6]                                                 # Posição 158 a 163 (6)
+    versao_layout = '083'                                                           # Posição 164 a 166 (3)
+    densidade = '00000'                                                             # Posição 167 a 171 (5)
+    reservado_banco = ' ' * 20                                                      # Posição 172 a 191 (20)
+    reservado_empresa = ' ' * 20                                                    # Posição 192 a 211 (20)
+    brancos3 = ' ' * 29                                                             # Posição 212 a 240 (29)
 
-    # 2. Montagem cravada (240 posições)
-    linha = (
-        "001" + "0000" + "0" + (" " * 9) + "2" + cnpj + bloco_convenio +
-        agencia + dv_agencia + conta + dv_conta + dv_ag_conta +
-        nome_empresa + nome_banco + (" " * 10) + "1" + data_geracao +
-        hora_geracao + nsa_str + "083" + "00000" + (" " * 20) + (" " * 20) + (" " * 29)
-    )
-    return linha.ljust(240)[:240]
+    # 2. Montagem final
+    linha = (banco + lote + registro + brancos1 + tipo_inscricao + cnpj + bloco_convenio + 
+             agencia + dv_agencia + conta + dv_conta + dv_ag_conta + nome_empresa + 
+             nome_banco + brancos2 + cod_remessa + data_geracao + hora_geracao + 
+             nsa_str + versao_layout + densidade + reservado_banco + reservado_empresa + brancos3)
+
+    return linha
 
 def header_lote(dados, num_lote, nsa):
-    # 1. Tratamento de dados
-    cnpj = str(dados.get('cnpj', '')).replace('.', '').replace('/', '').replace('-', '').zfill(14)
+    # 1. Tratamento de dados com tamanhos EXATOS travados
+    banco = '001'                                                                   # Posição 001 a 003 (3)
+    lote = str(num_lote).zfill(4)[:4]                                               # Posição 004 a 007 (4)
+    registro = '1'                                                                  # Posição 008 a 008 (1)
+    operacao = 'R'                                                                  # Posição 009 a 009 (1)
+    servico = '01'                                                                  # Posição 010 a 011 (2)
+    brancos1 = '  '                                                                 # Posição 012 a 013 (2)
+    versao_layout = '040'                                                           # Posição 014 a 016 (3)
+    brancos2 = ' '                                                                  # Posição 017 a 017 (1)
+    tipo_inscricao = '2'                                                            # Posição 018 a 018 (1)
+    cnpj = str(dados.get('cnpj', '')).replace('.', '').replace('/', '').replace('-', '').zfill(14)[:14] # Posição 019 a 032 (14)
 
-    # Bloco Convênio (Exatas 20 posições)
-    num_convenio = str(dados.get('convenio', '')).strip().zfill(9)
+    # Bloco Convênio BB (Exatas 20 posições)
+    convenio = str(dados.get('convenio', '')).strip().zfill(9)[:9]
     cobranca_cedente = '0014'
-    carteira = str(dados.get('carteira', '0')).strip().zfill(2)
-    variacao = str(dados.get('variacao', '0')).strip().zfill(3)
-    bloco_convenio = f"{num_convenio}{cobranca_cedente}{carteira}{variacao}  " # 20 chars
+    carteira = str(dados.get('carteira', '0')).strip().zfill(2)[:2]
+    variacao = str(dados.get('variacao', '0')).strip().zfill(3)[:3]
+    brancos_conv = '  '
+    bloco_convenio = convenio + cobranca_cedente + carteira + variacao + brancos_conv # Posição 033 a 052 (20)
 
-    agencia = str(dados.get('agencia', '')).strip().zfill(5)
-    dv_agencia = str(dados.get('dv_agencia', '')).strip().upper().ljust(1)[:1]
-    conta = str(dados.get('conta', '')).strip().zfill(12)
-    dv_conta = str(dados.get('dv_conta', '')).strip().upper().ljust(1)[:1]
-    dv_ag_conta = ' '
+    agencia = str(dados.get('agencia', '')).strip().zfill(5)[:5]                    # Posição 053 a 057 (5)
+    dv_agencia = str(dados.get('dv_agencia', '')).strip().upper().ljust(1)[:1]      # Posição 058 a 058 (1)
+    conta = str(dados.get('conta', '')).strip().zfill(12)[:12]                      # Posição 059 a 070 (12)
+    dv_conta = str(dados.get('dv_conta', '')).strip().upper().ljust(1)[:1]          # Posição 071 a 071 (1)
+    dv_ag_conta = ' '                                                               # Posição 072 a 072 (1)
 
-    nome_empresa = str(dados.get('razao_social', '')).strip().upper().ljust(30)[:30]
-    data_geracao = datetime.now().strftime("%d%m%Y")
-    lote_str = str(num_lote).zfill(4)
-    nsa_str = str(nsa).zfill(6) # BB usa 6 posições aqui com 2 brancos antes ou 8 posições
+    nome_empresa = str(dados.get('razao_social', '')).strip().upper().ljust(30)[:30]# Posição 073 a 102 (30)
+    mensagem1 = ' ' * 40                                                            # Posição 103 a 142 (40)
+    mensagem2 = ' ' * 40                                                            # Posição 143 a 182 (40)
+    nsa_str = str(nsa).zfill(8)[:8]                                                 # Posição 183 a 190 (8)
+    data_geracao = datetime.now().strftime("%d%m%Y")                                # Posição 191 a 198 (8)
+    data_credito = '00000000'                                                       # Posição 199 a 206 (8)
+    brancos3 = ' ' * 33                                                             # Posição 207 a 239 (33)
 
-    # 2. Montagem cravada (240 posições)
-    linha = (
-        "001" + lote_str + "1" + "R" + "01" + "  " + "040" + " " + "2" + cnpj + bloco_convenio +
-        agencia + dv_agencia + conta + dv_conta + dv_ag_conta +
-        nome_empresa + (" " * 40) + (" " * 40) + nsa_str.zfill(8) + data_geracao +
-        "00000000" + (" " * 33)
-    )
-    return linha.ljust(240)[:240]
+    # 2. Montagem final
+    linha = (banco + lote + registro + operacao + servico + brancos1 + versao_layout + 
+             brancos2 + tipo_inscricao + cnpj + bloco_convenio + agencia + dv_agencia + 
+             conta + dv_conta + dv_ag_conta + nome_empresa + mensagem1 + mensagem2 + 
+             nsa_str + data_geracao + data_credito + brancos3)
+
+    return linha
     
 def trailer_lote(lote, qtd_registros):
     return fmt_num("001", 3) + fmt_num(lote, 4) + fmt_num("5", 1) + fmt_alfa("", 9) + fmt_num(qtd_registros, 6) + fmt_num("0", 6) + fmt_alfa("", 205)
