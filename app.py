@@ -102,13 +102,62 @@ def fmt_conta_bb(dados):
 # FUNÇÕES DE FORMATAÇÃO CNAB 240
 # ==========================================
 def header_arquivo(dados, nsa):
-    reg = fmt_num("001", 3) + fmt_num("0000", 4) + fmt_num("0", 1) + fmt_alfa("", 9) + fmt_num("2", 1) + fmt_num(dados.get('cnpj',''), 14) + fmt_convenio_bb(dados) + fmt_conta_bb(dados) + fmt_alfa(dados.get('razao_social',''), 30) + fmt_alfa("BANCO DO BRASIL", 30) + fmt_alfa("", 10) + fmt_num("1", 1) + datetime.now().strftime('%d%m%Y') + datetime.now().strftime('%H%M%S') + fmt_num(nsa, 6) + fmt_num("083", 3) + fmt_alfa("", 5) + fmt_alfa("", 20) + fmt_alfa("", 20) + fmt_alfa("", 29)
-    return reg
+    # Formatação rigorosa para o Banco do Brasil
+    cnpj = str(dados.get('cnpj', '')).replace('.', '').replace('/', '').replace('-', '').zfill(14)
 
-def header_lote(dados, lote, nsa):
-    reg = fmt_num("001", 3) + fmt_num(lote, 4) + fmt_num("1", 1) + fmt_alfa("R", 1) + fmt_num("01", 2) + fmt_alfa("", 2) + fmt_num("045", 3) + fmt_alfa("", 1) + fmt_num("2", 1) + fmt_num(dados.get('cnpj',''), 15) + fmt_convenio_bb(dados) + fmt_conta_bb(dados) + fmt_alfa(dados.get('razao_social',''), 30) + fmt_alfa("", 40) + fmt_alfa("", 40) + fmt_num(nsa, 8) + datetime.now().strftime('%d%m%Y') + fmt_num("0", 8) + fmt_alfa("", 33)
-    return reg
+    # Bloco de Convênio BB (20 posições)
+    num_convenio = str(dados.get('convenio', '')).strip().zfill(9)
+    cobranca_cedente = '0014' # Fixo para o BB
+    carteira = str(dados.get('carteira', '0')).strip().zfill(2)
+    variacao = str(dados.get('variacao', '0')).strip().zfill(3)
+    bloco_convenio = f"{num_convenio}{cobranca_cedente}{carteira}{variacao}  "
 
+    agencia = str(dados.get('agencia', '')).strip().zfill(5)
+    dv_agencia = str(dados.get('dv_agencia', '')).strip().upper().ljust(1)
+    conta = str(dados.get('conta', '')).strip().zfill(12)
+    dv_conta = str(dados.get('dv_conta', '')).strip().upper().ljust(1)
+    dv_ag_conta = ' '
+
+    nome_empresa = str(dados.get('razao_social', '')).strip().upper().ljust(30)[:30]
+    nome_banco = 'BANCO DO BRASIL S.A.'.ljust(30)
+    data_geracao = datetime.now().strftime("%d%m%Y")
+    hora_geracao = datetime.now().strftime("%H%M%S")
+    nsa_str = str(nsa).zfill(6)
+
+    linha = (
+        f"00100000         2{cnpj}{bloco_convenio}"
+        f"{agencia}{dv_agencia}{conta}{dv_conta}{dv_ag_conta}{nome_empresa}{nome_banco}"
+        f"          1{data_geracao}{hora_geracao}{nsa_str}083000000                                                                          "
+    )
+    return linha
+
+def header_lote(dados, num_lote, nsa):
+    cnpj = str(dados.get('cnpj', '')).replace('.', '').replace('/', '').replace('-', '').zfill(14)
+
+    # Bloco de Convênio BB (20 posições)
+    num_convenio = str(dados.get('convenio', '')).strip().zfill(9)
+    cobranca_cedente = '0014' # Fixo para o BB
+    carteira = str(dados.get('carteira', '0')).strip().zfill(2)
+    variacao = str(dados.get('variacao', '0')).strip().zfill(3)
+    bloco_convenio = f"{num_convenio}{cobranca_cedente}{carteira}{variacao}  "
+
+    agencia = str(dados.get('agencia', '')).strip().zfill(5)
+    dv_agencia = str(dados.get('dv_agencia', '')).strip().upper().ljust(1)
+    conta = str(dados.get('conta', '')).strip().zfill(12)
+    dv_conta = str(dados.get('dv_conta', '')).strip().upper().ljust(1)
+    dv_ag_conta = ' '
+
+    nome_empresa = str(dados.get('razao_social', '')).strip().upper().ljust(30)[:30]
+    data_geracao = datetime.now().strftime("%d%m%Y")
+    lote_str = str(num_lote).zfill(4)
+    nsa_str = str(nsa).zfill(6)
+
+    linha = (
+        f"001{lote_str}1R01  040 2{cnpj}{bloco_convenio}"
+        f"{agencia}{dv_agencia}{conta}{dv_conta}{dv_ag_conta}{nome_empresa}"
+        f"                                        {nsa_str}{data_geracao}00000000                                                                                              "
+    )
+    return linha
 def trailer_lote(lote, qtd_registros):
     return fmt_num("001", 3) + fmt_num(lote, 4) + fmt_num("5", 1) + fmt_alfa("", 9) + fmt_num(qtd_registros, 6) + fmt_num("0", 6) + fmt_alfa("", 205)
 
