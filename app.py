@@ -425,16 +425,52 @@ if st.session_state.user:
                             st.stop() # Para a execução aqui se não tiver nada
 
                     # 2. Inicia a geração do arquivo
-                    dados_bancarios = df_convenios[df_convenios['razao_social'] == convenio_selecionado].iloc[0].to_dict()
-                    nsa = 1 
+                   dados_bancarios = df_convenios[
+    df_convenios['razao_social'] == convenio_selecionado
+].iloc[0].to_dict()
 
-                    resposta_cli = supabase.table("clientes").select("*").eq("user_id", st.session_state.user.id).execute()
-                    df_clientes_bd = pd.DataFrame(resposta_cli.data)
+# ===============================
+# VALIDAÇÃO DOS DADOS DO CONVÊNIO
+# ===============================
 
-                    linhas = []
-                    linhas.append(header_arquivo(dados_bancarios, nsa))
+def only_digits(valor):
+    return str(valor).isdigit()
 
-                    total_registros_arquivo = 0
+if not only_digits(dados_bancarios.get('convenio')):
+    st.error("❌ Convênio inválido ou não preenchido")
+    st.stop()
+
+if not only_digits(dados_bancarios.get('carteira')):
+    st.error("❌ Carteira não preenchida no convênio")
+    st.stop()
+
+if not only_digits(dados_bancarios.get('variacao')):
+    st.error("❌ Variação não preenchida no convênio")
+    st.stop()
+
+if not only_digits(dados_bancarios.get('agencia')):
+    st.error("❌ Agência não preenchida")
+    st.stop()
+
+if not only_digits(dados_bancarios.get('conta')):
+    st.error("❌ Conta não preenchida")
+    st.stop()
+
+# ===============================
+
+nsa = 1 
+
+resposta_cli = supabase.table("clientes") \
+    .select("*") \
+    .eq("user_id", st.session_state.user.id) \
+    .execute()
+
+df_clientes_bd = pd.DataFrame(resposta_cli.data)
+
+linhas = []
+linhas.append(header_arquivo(dados_bancarios, nsa))
+
+total_registros_arquivo = 0
 
                     # 3. Processa os lotes
                     for i, lote in enumerate(lotes_para_processar):
