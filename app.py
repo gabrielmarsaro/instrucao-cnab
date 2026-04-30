@@ -102,20 +102,20 @@ def fmt_conta_bb(dados):
 # FUNÇÕES DE FORMATAÇÃO CNAB 240
 # ==========================================
 def header_arquivo(dados, nsa):
-    # Formatação rigorosa para o Banco do Brasil
+    # 1. Tratamento de dados
     cnpj = str(dados.get('cnpj', '')).replace('.', '').replace('/', '').replace('-', '').zfill(14)
 
-    # Bloco de Convênio BB (20 posições)
+    # Bloco Convênio (Exatas 20 posições: 9 convênio + 4 fixo + 2 carteira + 3 variação + 2 brancos)
     num_convenio = str(dados.get('convenio', '')).strip().zfill(9)
-    cobranca_cedente = '0014' # Fixo para o BB
+    cobranca_cedente = '0014'
     carteira = str(dados.get('carteira', '0')).strip().zfill(2)
     variacao = str(dados.get('variacao', '0')).strip().zfill(3)
-    bloco_convenio = f"{num_convenio}{cobranca_cedente}{carteira}{variacao}  "
+    bloco_convenio = f"{num_convenio}{cobranca_cedente}{carteira}{variacao}  " # 20 chars
 
     agencia = str(dados.get('agencia', '')).strip().zfill(5)
-    dv_agencia = str(dados.get('dv_agencia', '')).strip().upper().ljust(1)
+    dv_agencia = str(dados.get('dv_agencia', '')).strip().upper().ljust(1)[:1]
     conta = str(dados.get('conta', '')).strip().zfill(12)
-    dv_conta = str(dados.get('dv_conta', '')).strip().upper().ljust(1)
+    dv_conta = str(dados.get('dv_conta', '')).strip().upper().ljust(1)[:1]
     dv_ag_conta = ' '
 
     nome_empresa = str(dados.get('razao_social', '')).strip().upper().ljust(30)[:30]
@@ -124,40 +124,46 @@ def header_arquivo(dados, nsa):
     hora_geracao = datetime.now().strftime("%H%M%S")
     nsa_str = str(nsa).zfill(6)
 
+    # 2. Montagem cravada (240 posições)
     linha = (
-        f"00100000         2{cnpj}{bloco_convenio}"
-        f"{agencia}{dv_agencia}{conta}{dv_conta}{dv_ag_conta}{nome_empresa}{nome_banco}"
-        f"          1{data_geracao}{hora_geracao}{nsa_str}083000000                                                                          "
+        "001" + "0000" + "0" + (" " * 9) + "2" + cnpj + bloco_convenio +
+        agencia + dv_agencia + conta + dv_conta + dv_ag_conta +
+        nome_empresa + nome_banco + (" " * 10) + "1" + data_geracao +
+        hora_geracao + nsa_str + "083" + "00000" + (" " * 20) + (" " * 20) + (" " * 29)
     )
-    return linha
+    return linha.ljust(240)[:240]
 
 def header_lote(dados, num_lote, nsa):
+    # 1. Tratamento de dados
     cnpj = str(dados.get('cnpj', '')).replace('.', '').replace('/', '').replace('-', '').zfill(14)
 
-    # Bloco de Convênio BB (20 posições)
+    # Bloco Convênio (Exatas 20 posições)
     num_convenio = str(dados.get('convenio', '')).strip().zfill(9)
-    cobranca_cedente = '0014' # Fixo para o BB
+    cobranca_cedente = '0014'
     carteira = str(dados.get('carteira', '0')).strip().zfill(2)
     variacao = str(dados.get('variacao', '0')).strip().zfill(3)
-    bloco_convenio = f"{num_convenio}{cobranca_cedente}{carteira}{variacao}  "
+    bloco_convenio = f"{num_convenio}{cobranca_cedente}{carteira}{variacao}  " # 20 chars
 
     agencia = str(dados.get('agencia', '')).strip().zfill(5)
-    dv_agencia = str(dados.get('dv_agencia', '')).strip().upper().ljust(1)
+    dv_agencia = str(dados.get('dv_agencia', '')).strip().upper().ljust(1)[:1]
     conta = str(dados.get('conta', '')).strip().zfill(12)
-    dv_conta = str(dados.get('dv_conta', '')).strip().upper().ljust(1)
+    dv_conta = str(dados.get('dv_conta', '')).strip().upper().ljust(1)[:1]
     dv_ag_conta = ' '
 
     nome_empresa = str(dados.get('razao_social', '')).strip().upper().ljust(30)[:30]
     data_geracao = datetime.now().strftime("%d%m%Y")
     lote_str = str(num_lote).zfill(4)
-    nsa_str = str(nsa).zfill(6)
+    nsa_str = str(nsa).zfill(6) # BB usa 6 posições aqui com 2 brancos antes ou 8 posições
 
+    # 2. Montagem cravada (240 posições)
     linha = (
-        f"001{lote_str}1R01  040 2{cnpj}{bloco_convenio}"
-        f"{agencia}{dv_agencia}{conta}{dv_conta}{dv_ag_conta}{nome_empresa}"
-        f"                                        {nsa_str}{data_geracao}00000000                                                                                              "
+        "001" + lote_str + "1" + "R" + "01" + "  " + "040" + " " + "2" + cnpj + bloco_convenio +
+        agencia + dv_agencia + conta + dv_conta + dv_ag_conta +
+        nome_empresa + (" " * 40) + (" " * 40) + nsa_str.zfill(8) + data_geracao +
+        "00000000" + (" " * 33)
     )
-    return linha
+    return linha.ljust(240)[:240]
+    
 def trailer_lote(lote, qtd_registros):
     return fmt_num("001", 3) + fmt_num(lote, 4) + fmt_num("5", 1) + fmt_alfa("", 9) + fmt_num(qtd_registros, 6) + fmt_num("0", 6) + fmt_alfa("", 205)
 
