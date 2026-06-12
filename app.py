@@ -1,458 +1,81 @@
+"""Entry point do Gerador CNAB 240 - Banco do Brasil."""
+
 import streamlit as st
-import pandas as pd
-from datetime import datetime
-import unicodedata
-import io
-from supabase import create_client, Client
 
-# --- Configurações da Página ---
-st.set_page_config(page_title="Gerador CNAB 240 - BB", layout="wide")
+from db import init_connection, secrets_configurados, traduzir_erro_db
+from ui import render_app, render_login
 
-# --- Conexão com Supabase ---
-@st.cache_resource
-def init_connection():
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
-    return create_client(url, key)
+st.set_page_config(
+    page_title="Gerador CNAB 240 - BB",
+    page_icon="🏦",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+if "user" not in st.session_state:
+    st.session_state.user = None
+if "lotes" not in st.session_state:
+    st.session_state.lotes = []
+if "remessa_gerada" not in st.session_state:
+    st.session_state.remessa_gerada = None
+if "access_token" not in st.session_state:
+    st.session_state.access_token = None
+if "refresh_token" not in st.session_state:
+    st.session_state.refresh_token = None
+
+if not secrets_configurados():
+    st.error("Credenciais do Supabase não configuradas.")
+    st.markdown(
+        """
+        Edite o arquivo **`.streamlit/secrets.toml`** na pasta do projeto com os dados do seu projeto:
+
+        1. Supabase → **Project Settings** → **API**
+        2. Copie **Project URL** e **anon public** key
+        3. Cole no arquivo e salve (o app recarrega sozinho)
+
+        ```toml
+        SUPABASE_URL = "https://xxxx.supabase.co"
+        SUPABASE_KEY = "eyJhbGciOi..."
+        ```
+
+        Use as **mesmas credenciais** do Streamlit Cloud.
+        """
+    )
+    st.stop()
+
+def restaurar_sessao(supabase):
+    """Mantém login após recarregar a página."""
+    if st.session_state.user:
+        return
+    if not (st.session_state.access_token and st.session_state.refresh_token):
+        return
+    try:
+        supabase.auth.set_session(
+            st.session_state.access_token,
+            st.session_state.refresh_token,
+        )
+        res = supabase.auth.get_user()
+        if res and res.user:
+            st.session_state.user = res.user
+    except Exception:
+        st.session_state.access_token = None
+        st.session_state.refresh_token = None
+
 
 try:
-    supabase: Client = init_connection()
-except Exception as e:
-    st.error("Erro ao conectar com o banco de dados. Verifique os Secrets no Streamlit.")
+    supabase = init_connection()
+    restaurar_sessao(supabase)
+except Exception as exc:
+    st.error(
+        "Não foi possível conectar ao Supabase. "
+        "Configure SUPABASE_URL e SUPABASE_KEY nos Secrets do Streamlit "
+        "(ou em `.streamlit/secrets.toml` localmente)."
+    )
+    st.caption(traduzir_erro_db(exc))
     st.stop()
 
-# --- Variáveis de Sessão ---
-if 'user' not in st.session_state:
-    st.session_state.user = None
-if 'lotes' not in st.session_state:
-    st.session_state.lotes = []
-
-INSTRUCOES_CNAB = [
-    "02 - Pedido de baixa", "04 - Concessão de Abatimento", "05 - Cancelamento de Abatimento",
-    "06 - Alteração de Vencimento", "07 - Concessão de Desconto", "08 - Cancelamento de Desconto",
-    "09 - Protestar", "10 - Cancela/Sustação da Instrução de protesto", "12 - Alterar Juros de Mora",
-    "13 - Dispensar Juros de Mora", "14 - Cobrar Multa", "15 - Dispensar Multa",
-    "16 - Ratificar dados da Concessão de Desconto", "19 - Altera Prazo Limite de Recebimento",
-    "20 - Dispensar Prazo Limite de Recebimento", "21 - Altera do Número do Título dado pelo Beneficiário",
-    "22 - Alteração do Número de Controle do Participante", "23 - Alteração de Nome e Endereço do Pagador",
-    "30 - Recusa da Alegação do Sacado", "31 - Alteração de Outros Dados",
-    "34 - Altera Data Para Concessão de Desconto", "40 - Alteração de modalidade",
-    "45 - Inclusão de Negativação sem protesto", "46 - Exclusão de Negativação sem protesto",
-    "47 - Alteração do Valor Nominal do Boleto"
-]
-
-# --- Funções de Formatação CNAB ---
-def normalizar_id_cliente(valor):
-    if pd.isna(valor): return ""
-    v = str(valor).replace('.0', '').strip().upper()
-    if v.lower() == 'nan' or v == '': return ""
-    if v.isdigit(): return str(int(v)) 
-    return v
-
-def fmt_num(valor, tamanho):
-    if pd.isna(valor): valor = 0
-    v_str = str(valor).strip()
-    if v_str.endswith('.0'): v_str = v_str[:-2]
-    return "".join(filter(str.isdigit, v_str)).zfill(tamanho)[:tamanho]
-
-def fmt_alfa(valor, tamanho):
-    if pd.isna(valor) or str(valor).lower() == 'nan': valor = ""
-    texto = str(valor)
-    texto = ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
-    texto = "".join(c for c in texto if c.isalnum() or c.isspace())
-    return texto.upper().ljust(tamanho, ' ')[:tamanho]
-
-def fmt_date(valor):
-    if pd.isna(valor) or str(valor).strip().lower() in ['nan', 'nat', '']: return "00000000"
-    v_str = str(valor).strip()
-    try:
-        if v_str.replace('.0', '').isdigit():
-            serial = int(float(v_str))
-            return (pd.to_datetime('1899-12-30') + pd.to_timedelta(serial, unit='D')).strftime('%d%m%Y')
-        return pd.to_datetime(v_str).strftime('%d%m%Y')
-    except: return "00000000"
-
-def fmt_money(valor, tamanho):
-    if pd.isna(valor) or str(valor).strip().lower() in ['nan', '']: return "0".zfill(tamanho)
-    try: return str(int(round(float(str(valor).replace(',', '.')) * 100))).zfill(tamanho)[:tamanho]
-    except: return "0".zfill(tamanho)
-
-def limpar_nosso_numero(valor):
-    if pd.isna(valor) or str(valor).lower() == 'nan': return ""
-    v_str = str(valor).strip().upper()
-    if 'E' in v_str or '+' in v_str:
-        try: return str(int(float(v_str)))
-        except: pass
-    if v_str.endswith('.0'): v_str = v_str[:-2]
-    return "".join(filter(str.isdigit, v_str))
-
-def fmt_conta_bb(dados):
-    return fmt_num(dados.get('agencia', ''), 5) + fmt_alfa(dados.get('dv_agencia', ''), 1) + fmt_num(dados.get('conta', ''), 12) + fmt_alfa(dados.get('dv_conta', ''), 1) + " "
-
-def fmt_convenio_bb(dados):
-    return fmt_num(dados.get('convenio', ''), 9) + "0014" + fmt_num(dados.get('carteira', ''), 2) + fmt_num(dados.get('variacao', ''), 3) + "  "
-
-def header_arquivo(dados, nsa):
-    reg = fmt_num("001", 3) + fmt_num("0000", 4) + fmt_num("0", 1) + fmt_alfa("", 9) + fmt_num("2", 1) + fmt_num(dados['cnpj'], 14) + fmt_convenio_bb(dados) + fmt_conta_bb(dados) + fmt_alfa(dados['razao_social'], 30) + fmt_alfa("BANCO DO BRASIL", 30) + fmt_alfa("", 10) + fmt_num("1", 1) + datetime.now().strftime('%d%m%Y') + datetime.now().strftime('%H%M%S') + fmt_num(nsa, 6) + fmt_num("083", 3) + fmt_alfa("", 5) + fmt_alfa("", 20) + fmt_alfa("", 20) + fmt_alfa("", 29)
-    return reg
-
-def header_lote(dados, lote, nsa):
-    reg = fmt_num("001", 3) + fmt_num(lote, 4) + fmt_num("1", 1) + fmt_alfa("R", 1) + fmt_num("01", 2) + fmt_alfa("", 2) + fmt_num("045", 3) + fmt_alfa("", 1) + fmt_num("2", 1) + fmt_num(dados['cnpj'], 15) + fmt_convenio_bb(dados) + fmt_conta_bb(dados) + fmt_alfa(dados['razao_social'], 30) + fmt_alfa("", 40) + fmt_alfa("", 40) + fmt_num(nsa, 8) + datetime.now().strftime('%d%m%Y') + fmt_num("0", 8) + fmt_alfa("", 33)
-    return reg
-
-def trailer_lote(lote, qtd_registros):
-    return fmt_num("001", 3) + fmt_num(lote, 4) + fmt_num("5", 1) + fmt_alfa("", 9) + fmt_num(qtd_registros, 6) + fmt_num("0", 6) + fmt_alfa("", 205)
-
-def trailer_arquivo(qtd_lotes, qtd_registros):
-    return fmt_num("001", 3) + fmt_num("9999", 4) + fmt_num("9", 1) + fmt_alfa("", 9) + fmt_num(qtd_lotes, 6) + fmt_num(qtd_registros, 6) + fmt_num("0", 6) + fmt_alfa("", 205)
-
-def segmento_p(row, lote, seq, dados, colunas_map, cod_instrucao, nova_data_venc=""):
-    reg = fmt_num("001", 3) + fmt_num(lote, 4) + fmt_num("3", 1) + fmt_num(seq, 5) + fmt_alfa("P", 1) + fmt_alfa("", 1) + fmt_num(cod_instrucao, 2) + fmt_conta_bb(dados)
-    nn = limpar_nosso_numero(row.get(colunas_map['nn'], ""))
-    reg += fmt_alfa(nn, 20) + fmt_num(dados.get('carteira', '17'), 1) + fmt_num("1", 1) + fmt_alfa("2", 1) + fmt_num("2", 1) + fmt_alfa("2", 1)
-    seu_numero = str(row.get(colunas_map['doc'], "")).replace(".0", "")
-    if seu_numero.lower() == 'nan': seu_numero = ""
-    reg += fmt_alfa(seu_numero, 15)
-    vencimento = nova_data_venc.replace("/", "") if cod_instrucao == "06" and nova_data_venc else fmt_date(row.get(colunas_map['venc']))
-    valor_boleto = row.get(colunas_map['valor']) if cod_instrucao == "47" else row.get(colunas_map['montante'])
-    reg += vencimento + fmt_money(valor_boleto, 15) + fmt_num("0", 5) + fmt_alfa("", 1) + fmt_num("99", 2) + fmt_alfa("N", 1)
-    reg += fmt_date(row.get(colunas_map['venc'])) + fmt_num("3", 1) + fmt_num("0", 8) + fmt_num("0", 15) + fmt_num("0", 1) + fmt_num("0", 8) + fmt_num("0", 15) + fmt_num("0", 15) + fmt_num("0", 15) + fmt_alfa("", 25) + fmt_num("3", 1) + fmt_num("0", 2) + fmt_num("0", 1) + fmt_num("0", 3) + fmt_num("09", 2) + fmt_num("0", 10) + fmt_alfa("", 1)
-    return reg
-
-def segmento_q(row, lote, seq, colunas_map, cod_instrucao):
-    reg = fmt_num("001", 3) + fmt_num(lote, 4) + fmt_num("3", 1) + fmt_num(seq, 5) + fmt_alfa("Q", 1) + fmt_alfa("", 1) + fmt_num(cod_instrucao, 2)
-    cpf_cnpj = str(row.get("cnpj_cpf", "")).strip().replace(".0", "")
-    if cpf_cnpj.lower() == 'nan': cpf_cnpj = ""
-    tipo_inscricao = "2" if len(cpf_cnpj) > 11 else ("1" if cpf_cnpj else "0")
-    reg += fmt_num(tipo_inscricao, 1) + fmt_num(cpf_cnpj, 15)
-    nome = str(row.get("nome", ""))
-    reg += fmt_alfa("" if nome.lower() == 'nan' else nome, 40)
-    end = str(row.get("endereco", ""))
-    reg += fmt_alfa("" if end.lower() == 'nan' else end, 40)
-    bairro = str(row.get("bairro", ""))
-    reg += fmt_alfa("" if bairro.lower() == 'nan' else bairro, 15)
-    cep = str(row.get("cep", "")).replace("-", "").replace(".0", "")
-    reg += fmt_num(cep if cep.isdigit() else "0", 8)
-    cidade = str(row.get("cidade", ""))
-    reg += fmt_alfa("" if cidade.lower() == 'nan' else cidade, 15)
-    uf = str(row.get("uf", ""))
-    reg += fmt_alfa("" if uf.lower() == 'nan' else uf, 2)
-    reg += fmt_num("0", 1) + fmt_num("0", 15) + fmt_alfa("", 40) + fmt_num("0", 3) + fmt_alfa("", 20) + fmt_alfa("", 8)
-    return reg
-
-# --- Funções de Autenticação ---
-def login(email, password):
-    try:
-        # Removida a vírgula que estava causando o erro
-        res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-        st.session_state.user = res.user
-        st.success("Login realizado com sucesso!")
-        st.rerun()
-    except Exception as e:
-        st.error(f"Erro no login: {e}")
-
-def sign_up(email, password):
-    try:
-        res = supabase.auth.signUp({"email": email, "password": password})
-        st.success("Conta criada! Você já pode fazer login.")
-    except Exception as e:
-        st.error(f"Erro ao criar conta: {e}")
-
-# --- Tela de Login ---
 if not st.session_state.user:
-    st.title("🔐 Acesso ao Sistema CNAB")
-    tab_login, tab_cadastro = st.tabs(["Login", "Criar Conta"])
-
-    with tab_login:
-        email_login = st.text_input("E-mail", key="log_email")
-        senha_login = st.text_input("Senha", type="password", key="log_senha")
-        if st.button("Entrar"):
-            login(email_login, senha_login)
-
-    with tab_cadastro:
-        email_cad = st.text_input("E-mail", key="cad_email")
-        senha_cad = st.text_input("Senha (mín. 6 caracteres)", type="password", key="cad_senha")
-        if st.button("Cadastrar"):
-            sign_up(email_cad, senha_cad) # Corrigido de signup para sign_up
+    render_login(supabase)
     st.stop()
 
-# --- Sistema Principal (Logado) ---
-st.sidebar.write(f"👤 Logado como: {st.session_state.user.email}")
-if st.sidebar.button("Sair"):
-    logout()
-
-st.title("🏦 Gerador de Remessa CNAB 240")
-
-aba_gerador, aba_clientes, aba_convenios = st.tabs(["Gerar Remessa", "Meus Clientes", "Meus Convênios"])
-
-# --- ABA: MEUS CLIENTES ---
-with aba_clientes:
-    st.header("Gestão de Clientes")
-
-    resposta_cli = supabase.table("clientes").select("*").eq("user_id", st.session_state.user.id).execute()
-    df_clientes = pd.DataFrame(resposta_cli.data)
-
-    if not df_clientes.empty:
-        # Dicionário seguro mapeando texto da tela para o ID real do banco
-        mapa_clientes = {}
-        for index, row in df_clientes.iterrows():
-            texto_exibicao = f"{row.get('nome', 'Sem Nome')} (Cód: {row.get('id_cliente_planilha', 'S/C')})"
-            mapa_clientes[texto_exibicao] = row['id']
-
-        opcoes_clientes = list(mapa_clientes.keys())
-
-        tab_vis_cli, tab_edit_cli, tab_del_cli = st.tabs(["👁️ Visualizar", "✏️ Editar", "🗑️ Excluir em Lote"])
-
-        with tab_vis_cli:
-            st.dataframe(df_clientes.drop(columns=['id', 'user_id', 'created_at']), use_container_width=True)
-
-        with tab_edit_cli:
-            cliente_selecionado = st.selectbox("Selecione o cliente para editar:", [""] + opcoes_clientes)
-            if cliente_selecionado:
-                id_real = mapa_clientes[cliente_selecionado]
-                dados_cli = df_clientes[df_clientes['id'] == id_real].iloc[0]
-
-                with st.form("form_edit_cli"):
-                    col1, col2 = st.columns(2)
-                    edit_cod = col1.text_input("Código na Planilha", value=str(dados_cli.get('id_cliente_planilha', '')))
-                    edit_cnpj = col2.text_input("CNPJ/CPF", value=str(dados_cli.get('cnpj_cpf', '')))
-
-                    edit_nome = st.text_input("Nome / Razão Social", value=str(dados_cli.get('nome', '')))
-                    edit_end = st.text_input("Endereço", value=str(dados_cli.get('endereco', '')))
-
-                    col3, col4, col5, col6 = st.columns(4)
-                    edit_bairro = col3.text_input("Bairro", value=str(dados_cli.get('bairro', '')))
-                    edit_cep = col4.text_input("CEP", value=str(dados_cli.get('cep', '')))
-                    edit_cidade = col5.text_input("Cidade", value=str(dados_cli.get('cidade', '')))
-                    edit_uf = col6.text_input("UF", value=str(dados_cli.get('uf', '')))
-
-                    if st.form_submit_button("💾 Salvar Alterações", type="primary"):
-                        try:
-                            supabase.table("clientes").update({
-                                "id_cliente_planilha": edit_cod, "cnpj_cpf": edit_cnpj,
-                                "nome": edit_nome, "endereco": edit_end,
-                                "bairro": edit_bairro, "cep": edit_cep,
-                                "cidade": edit_cidade, "uf": edit_uf
-                            }).eq("id", id_real).execute()
-                            st.success("Cliente atualizado!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Erro: {e}")
-
-        with tab_del_cli:
-            st.write("Selecione os clientes que deseja apagar:")
-            marcar_todos = st.checkbox("☑️ Selecionar TODOS")
-            clientes_para_excluir = st.multiselect(
-                "Clientes selecionados:", 
-                opcoes_clientes, 
-                default=opcoes_clientes if marcar_todos else None
-            )
-
-            if clientes_para_excluir:
-                st.warning(f"⚠️ Excluindo {len(clientes_para_excluir)} cliente(s).")
-                if st.button("🚨 Confirmar Exclusão", type="primary"):
-                    try:
-                        ids_excluir = [mapa_clientes[c] for c in clientes_para_excluir]
-                        for id_interno in ids_excluir:
-                            supabase.table("clientes").delete().eq("id", id_interno).execute()
-                        st.success("Clientes excluídos!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Erro: {e}")
-    else:
-        st.info("Nenhum cliente cadastrado ainda.")
-
-# --- ABA: MEUS CONVÊNIOS ---
-with aba_convenios:
-    st.header("Gestão de Convênios")
-
-    resposta_conv = supabase.table("convenios").select("*").eq("user_id", st.session_state.user.id).execute()
-    df_convenios = pd.DataFrame(resposta_conv.data)
-
-    if not df_convenios.empty:
-        mapa_convenios = {}
-        for index, row in df_convenios.iterrows():
-            texto_exibicao = f"{row.get('razao_social', 'S/N')} (Ag: {row.get('agencia', '')} | CC: {row.get('conta', '')})"
-            mapa_convenios[texto_exibicao] = row['id']
-
-        opcoes_convenios = list(mapa_convenios.keys())
-
-        tab_vis_conv, tab_edit_conv, tab_del_conv = st.tabs(["👁️ Visualizar", "✏️ Editar", "🗑️ Excluir"])
-
-        with tab_vis_conv:
-            st.dataframe(df_convenios.drop(columns=['id', 'user_id', 'created_at']), use_container_width=True)
-
-        with tab_edit_conv:
-            conv_selecionado = st.selectbox("Selecione o convênio para editar:", [""] + opcoes_convenios)
-            if conv_selecionado:
-                id_real_conv = mapa_convenios[conv_selecionado]
-                dados_conv = df_convenios[df_convenios['id'] == id_real_conv].iloc[0]
-
-                with st.form("form_edit_conv"):
-                    col1, col2 = st.columns(2)
-                    edit_cnpj_conv = col1.text_input("CNPJ", value=str(dados_conv.get('cnpj', '')))
-                    edit_razao_conv = col2.text_input("Razão Social", value=str(dados_conv.get('razao_social', '')))
-
-                    col3, col4, col5, col6 = st.columns(4)
-                    edit_agencia = col3.text_input("Agência", value=str(dados_conv.get('agencia', '')))
-                    edit_dv_agencia = col4.text_input("DV Agência", value=str(dados_conv.get('dv_agencia', '')))
-                    edit_conta = col5.text_input("Conta", value=str(dados_conv.get('conta', '')))
-                    edit_dv_conta = col6.text_input("DV Conta", value=str(dados_conv.get('dv_conta', '')))
-
-                    col7, col8, col9 = st.columns(3)
-                    edit_convenio = col7.text_input("Convênio", value=str(dados_conv.get('convenio', '')))
-                    edit_carteira = col8.text_input("Carteira", value=str(dados_conv.get('carteira', '')))
-                    edit_variacao = col9.text_input("Variação", value=str(dados_conv.get('variacao', '')))
-
-                    if st.form_submit_button("💾 Salvar Convênio", type="primary"):
-                        try:
-                            supabase.table("convenios").update({
-                                "cnpj": edit_cnpj_conv, "razao_social": edit_razao_conv,
-                                "agencia": edit_agencia, "dv_agencia": edit_dv_agencia,
-                                "conta": edit_conta, "dv_conta": edit_dv_conta,
-                                "convenio": edit_convenio, "carteira": edit_carteira,
-                                "variacao": edit_variacao
-                            }).eq("id", id_real_conv).execute()
-                            st.success("Convênio atualizado!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Erro: {e}")
-
-        with tab_del_conv:
-            st.write("Selecione o convênio que deseja remover:")
-            conv_para_excluir = st.selectbox("Convênio a excluir:", [""] + opcoes_convenios, key="del_conv")
-
-            if conv_para_excluir:
-                st.warning(f"⚠️ Excluindo: {conv_para_excluir}")
-                if st.button("🚨 Confirmar Exclusão do Convênio", type="primary"):
-                    try:
-                        id_real_del = mapa_convenios[conv_para_excluir]
-                        supabase.table("convenios").delete().eq("id", id_real_del).execute()
-                        st.success("Convênio excluído!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Erro: {e}")
-    else:
-        st.info("Nenhum convênio cadastrado ainda.")
-        
-# --- ABA: GERADOR ---
-with aba_gerador:
-    col1, col2 = st.columns(2)
-
-    # Selecionar Convênio
-    opcoes_convenios = df_convenios['razao_social'].tolist() if not df_convenios.empty else ["Nenhum convênio cadastrado"]
-    convenio_selecionado = col1.selectbox("Selecione o Convênio", opcoes_convenios)
-
-    # Upload de Boletos
-    arquivo_boletos = col2.file_uploader("Planilha de Boletos", type=["xlsx", "xls"])
-
-    st.divider()
-
-    # Montar Lotes
-    st.subheader("📦 Montar Lotes de Instrução")
-    instrucao = st.selectbox("Instrução para este lote:", INSTRUCOES_CNAB)
-    nova_data_str = ""
-    if instrucao.startswith("06"):
-        nova_data_str = st.text_input("Nova Data Vencimento (DD/MM/AAAA):")
-
-    if st.button("➕ Adicionar ao Lote"):
-        if arquivo_boletos and not df_convenios.empty:
-            df_lote = pd.read_excel(arquivo_boletos)
-            st.session_state.lotes.append({
-                "instrucao": instrucao,
-                "nova_data": nova_data_str,
-                "df": df_lote,
-                "nome_arquivo": arquivo_boletos.name
-            })
-            st.success(f"Lote adicionado! ({len(df_lote)} boletos)")
-        else:
-            st.warning("Anexe a planilha e certifique-se de ter um convênio cadastrado.")
-
-    # Mostrar Lotes e Gerar
-    if st.session_state.lotes:
-        st.write("### Carrinho de Lotes")
-        for i, lote in enumerate(st.session_state.lotes):
-            st.write(f"**Lote {i+1}:** {lote['instrucao']} - Arquivo: {lote['nome_arquivo']} ({len(lote['df'])} boletos)")
-
-        if st.button("🚀 GERAR ARQUIVO REMESSA FINAL", type="primary"):
-            try:
-                dados_bancarios = df_convenios[df_convenios['razao_social'] == convenio_selecionado].iloc[0].to_dict()
-                nsa = 1 
-
-                # Busca clientes no banco
-                resposta_cli = supabase.table("clientes").select("*").eq("user_id", st.session_state.user.id).execute()
-                df_clientes_banco = pd.DataFrame(resposta_cli.data)
-
-                linhas = []
-                linhas.append(header_arquivo(dados_bancarios, nsa))
-                total_registros_arquivo = 0
-
-                for i, lote in enumerate(st.session_state.lotes):
-                    numero_lote = i + 1
-                    linhas.append(header_lote(dados_bancarios, numero_lote, nsa))
-
-                    df_boletos = lote['df']
-                    cod_instrucao = lote['instrucao'].split(" - ")[0].strip()
-
-                    colunas_bol_lower = [str(c).strip().lower() for c in df_boletos.columns]
-                    df_boletos.columns = colunas_bol_lower
-                    colunas_map = {
-                        'nn': next((c for c in colunas_bol_lower if 'nosso numero' in c or 'nosso_numero' in c), 'nosso numero'),
-                        'doc': next((c for c in colunas_bol_lower if 'documento' in c), 'nº documento'),
-                        'venc': next((c for c in colunas_bol_lower if 'vencimento' in c), 'vencimento líquido'),
-                        'valor': next((c for c in colunas_bol_lower if 'corrigido' in c or 'novo valor' in c), 'total corrigido'),
-                        'montante': next((c for c in colunas_bol_lower if 'montante' in c), 'montante'),
-                        'cliente': next((c for c in colunas_bol_lower if 'cliente' in c), 'cliente')
-                    }
-
-                    seq_reg = 1
-                    for index, row in df_boletos.iterrows():
-                        try:
-                            row_dict = row.to_dict()
-
-                            # Cruzamento de dados seguro
-                            cod_cliente_boleto = str(row_dict.get(colunas_map['cliente'], '')).replace('.0', '').strip()
-
-                            if not df_clientes_banco.empty and 'id_cliente_planilha' in df_clientes_banco.columns:
-                                match = df_clientes_banco[df_clientes_banco['id_cliente_planilha'].astype(str) == cod_cliente_boleto]
-                                if not match.empty:
-                                    dados_cli = match.iloc[0].to_dict()
-                                    row_dict['cnpj_cpf'] = dados_cli.get('cnpj_cpf', '')
-                                    row_dict['nome'] = dados_cli.get('nome', '')
-                                    row_dict['endereco'] = dados_cli.get('endereco', '')
-                                    row_dict['bairro'] = dados_cli.get('bairro', '')
-                                    row_dict['cep'] = dados_cli.get('cep', '')
-                                    row_dict['cidade'] = dados_cli.get('cidade', '')
-                                    row_dict['uf'] = dados_cli.get('uf', '')
-
-                            linhas.append(segmento_p(row_dict, numero_lote, seq_reg, dados_bancarios, colunas_map, cod_instrucao, lote['nova_data']))
-                            seq_reg += 1
-                            linhas.append(segmento_q(row_dict, numero_lote, seq_reg, colunas_map, cod_instrucao))
-                            seq_reg += 1
-
-                        except Exception as e_linha:
-                            st.error(f"Erro ao processar o boleto da linha {index + 2} da planilha: {e_linha}")
-
-                    linhas.append(trailer_lote(numero_lote, seq_reg + 1))
-                    total_registros_arquivo += (seq_reg + 1)
-
-                linhas.append(trailer_arquivo(len(st.session_state.lotes), total_registros_arquivo + 2))
-
-                cnab_bytes = io.BytesIO()
-                for linha in linhas:
-                    linha_limpa = ''.join(c for c in unicodedata.normalize('NFD', linha) if unicodedata.category(c) != 'Mn')
-                    linha_final = linha_limpa.ljust(240, " ")[:240] + "\r\n"
-                    bytes_linha = linha_final.encode('ascii', errors='replace').replace(b'?', b' ')
-                    cnab_bytes.write(bytes_linha)
-
-                st.success("Arquivo gerado com sucesso!")
-                st.download_button(
-                    label="📥 Baixar Arquivo CNAB",
-                    data=cnab_bytes.getvalue(),
-                    file_name=f"remessa_bb_multiplos_lotes.rem",
-                    mime="text/plain"
-                )
-                st.session_state.lotes = []
-
-            except Exception as e:
-                st.error(f"Erro fatal ao gerar arquivo: {e}")
+render_app(supabase)
