@@ -471,7 +471,7 @@ def render_sidebar(supabase: Client, user):
         logout(supabase)
     st.sidebar.markdown("---")
     st.sidebar.caption("CNAB 240 · Banco do Brasil")
-    st.sidebar.caption("Versao interface: 2026.06.11e")
+    st.sidebar.caption("Versao interface: 2026.06.11f")
 
 
 def _render_importacao_clientes(supabase: Client, user_id: str, df_clientes: pd.DataFrame):

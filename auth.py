@@ -21,8 +21,6 @@ def login(supabase: Client, email: str, password: str) -> bool:
         return True
     except Exception as exc:
         st.error(traduzir_erro_db(exc))
-        with st.expander("Detalhes do erro"):
-            st.code(str(exc))
         return False
 
 
@@ -35,9 +33,21 @@ def sign_up(supabase: Client, email: str, password: str) -> bool:
         return False
     try:
         supabase.auth.sign_up({"email": email.strip(), "password": password})
-        st.success("Conta criada! Verifique seu e-mail (se exigido) e faça login.")
+        st.success(
+            "Se os dados estiverem corretos, sua conta foi criada. "
+            "Verifique seu e-mail (se exigido) e faça login. "
+            "Se você já tem conta, use **Entrar** ou **Esqueci a senha**."
+        )
         return True
     except Exception as exc:
+        msg = str(exc).lower()
+        if "already registered" in msg or "user already" in msg:
+            # Mensagem neutra: evita revelar se o e-mail existe (enumeracao)
+            st.info(
+                "Se os dados estiverem corretos, sua conta foi criada. "
+                "Verifique seu e-mail. Se você já tem conta, use **Entrar** ou **Esqueci a senha**."
+            )
+            return True
         st.error(traduzir_erro_db(exc))
         return False
 
