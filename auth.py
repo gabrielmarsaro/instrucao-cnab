@@ -42,6 +42,22 @@ def sign_up(supabase: Client, email: str, password: str) -> bool:
         return False
 
 
+def recuperar_senha(supabase: Client, email: str) -> bool:
+    if not email or not email.strip():
+        st.error("Informe o e-mail cadastrado para recuperar a senha.")
+        return False
+    try:
+        supabase.auth.reset_password_for_email(email.strip())
+        st.success(
+            "Se o e-mail estiver cadastrado, voce recebera um link para redefinir a senha. "
+            "Verifique tambem a caixa de spam."
+        )
+        return True
+    except Exception as exc:
+        st.error(traduzir_erro_db(exc))
+        return False
+
+
 def logout(supabase: Client) -> None:
     try:
         supabase.auth.sign_out()

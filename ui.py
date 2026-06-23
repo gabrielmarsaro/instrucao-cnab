@@ -10,7 +10,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from supabase import Client
 
-from auth import login, logout, sign_up
+from auth import login, logout, recuperar_senha, sign_up
 from cnab import (
     buscar_valor_registrado,
     coletar_nosso_numeros_lotes,
@@ -200,28 +200,35 @@ def render_login(supabase: Client):
         <style>
         section[data-testid="stSidebar"] {{ display: none; }}
         [data-testid="stAppViewContainer"] .block-container {{
-            max-width: 460px;
-            padding-top: 4rem;
+            max-width: 620px;
+            padding-top: 3.5rem;
         }}
         .login-titulo {{
             text-align: center;
             font-family: {FONTE_APP};
-            font-size: 1.5rem;
+            font-size: 2.1rem;
             font-weight: 700;
             color: #1f4e79;
-            margin: 0 0 0.25rem 0;
+            margin: 0 0 0.35rem 0;
         }}
         .login-sub {{
             text-align: center;
             font-family: {FONTE_APP};
-            font-size: 0.95rem;
+            font-size: 1.1rem;
             color: #6b7280;
-            margin: 0 0 1.5rem 0;
+            margin: 0 0 1.8rem 0;
         }}
         .login-logo {{
             text-align: center;
-            font-size: 2.6rem;
-            margin-bottom: 0.3rem;
+            font-size: 3.6rem;
+            margin-bottom: 0.4rem;
+        }}
+        [data-testid="stAppViewContainer"] [data-baseweb="tab"] {{
+            font-size: 1.05rem;
+        }}
+        [data-testid="stAppViewContainer"] .stTextInput input {{
+            padding-top: 0.6rem;
+            padding-bottom: 0.6rem;
         }}
         </style>
         """,
@@ -242,7 +249,9 @@ def render_login(supabase: Client):
         )
 
     with st.container(border=True):
-        tab_login, tab_cadastro = st.tabs(["Entrar", "Criar Conta"])
+        tab_login, tab_cadastro, tab_recuperar = st.tabs(
+            ["Entrar", "Criar Conta", "Esqueci a senha"]
+        )
 
         with tab_login:
             with st.form("form_login"):
@@ -259,6 +268,15 @@ def render_login(supabase: Client):
                 )
                 if st.form_submit_button("Cadastrar", use_container_width=True):
                     sign_up(supabase, email_cad, senha_cad)
+
+        with tab_recuperar:
+            st.caption(
+                "Informe seu e-mail cadastrado. Enviaremos um link para você redefinir a senha."
+            )
+            with st.form("form_recuperar"):
+                email_rec = st.text_input("E-mail", key="rec_email")
+                if st.form_submit_button("Enviar link de recuperação", use_container_width=True):
+                    recuperar_senha(supabase, email_rec)
 
 
 def _mapa_clientes(df: pd.DataFrame) -> dict[str, str]:
@@ -453,7 +471,7 @@ def render_sidebar(supabase: Client, user):
         logout(supabase)
     st.sidebar.markdown("---")
     st.sidebar.caption("CNAB 240 · Banco do Brasil")
-    st.sidebar.caption("Versao interface: 2026.06.11c")
+    st.sidebar.caption("Versao interface: 2026.06.11e")
 
 
 def _render_importacao_clientes(supabase: Client, user_id: str, df_clientes: pd.DataFrame):
