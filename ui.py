@@ -195,9 +195,43 @@ def aplicar_estilo():
 
 def render_login(supabase: Client):
     aplicar_estilo()
-    st.markdown('<p class="main-header">🔐 Gerador CNAB 240 — Banco do Brasil</p>', unsafe_allow_html=True)
     st.markdown(
-        '<p class="sub-header">Acesse sua conta para gerar remessas, gerenciar clientes e convênios.</p>',
+        f"""
+        <style>
+        section[data-testid="stSidebar"] {{ display: none; }}
+        [data-testid="stAppViewContainer"] .block-container {{
+            max-width: 460px;
+            padding-top: 4rem;
+        }}
+        .login-titulo {{
+            text-align: center;
+            font-family: {FONTE_APP};
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #1f4e79;
+            margin: 0 0 0.25rem 0;
+        }}
+        .login-sub {{
+            text-align: center;
+            font-family: {FONTE_APP};
+            font-size: 0.95rem;
+            color: #6b7280;
+            margin: 0 0 1.5rem 0;
+        }}
+        .login-logo {{
+            text-align: center;
+            font-size: 2.6rem;
+            margin-bottom: 0.3rem;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="login-logo">🏦</div>', unsafe_allow_html=True)
+    st.markdown('<div class="login-titulo">Gerador CNAB 240</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="login-sub">Banco do Brasil — remessas, clientes e convênios</div>',
         unsafe_allow_html=True,
     )
 
@@ -207,21 +241,24 @@ def render_login(supabase: Client):
             "Edite `.streamlit/secrets.toml` com a URL e a chave **anon public** do seu projeto."
         )
 
-    tab_login, tab_cadastro = st.tabs(["Login", "Criar Conta"])
+    with st.container(border=True):
+        tab_login, tab_cadastro = st.tabs(["Entrar", "Criar Conta"])
 
-    with tab_login:
-        with st.form("form_login"):
-            email_login = st.text_input("E-mail")
-            senha_login = st.text_input("Senha", type="password")
-            if st.form_submit_button("Entrar", type="primary", use_container_width=True):
-                login(supabase, email_login, senha_login)
+        with tab_login:
+            with st.form("form_login"):
+                email_login = st.text_input("E-mail")
+                senha_login = st.text_input("Senha", type="password")
+                if st.form_submit_button("Entrar", type="primary", use_container_width=True):
+                    login(supabase, email_login, senha_login)
 
-    with tab_cadastro:
-        with st.form("form_cadastro"):
-            email_cad = st.text_input("E-mail", key="cad_email")
-            senha_cad = st.text_input("Senha (mín. 6 caracteres)", type="password", key="cad_senha")
-            if st.form_submit_button("Cadastrar", use_container_width=True):
-                sign_up(supabase, email_cad, senha_cad)
+        with tab_cadastro:
+            with st.form("form_cadastro"):
+                email_cad = st.text_input("E-mail", key="cad_email")
+                senha_cad = st.text_input(
+                    "Senha (mín. 6 caracteres)", type="password", key="cad_senha"
+                )
+                if st.form_submit_button("Cadastrar", use_container_width=True):
+                    sign_up(supabase, email_cad, senha_cad)
 
 
 def _mapa_clientes(df: pd.DataFrame) -> dict[str, str]:
@@ -416,7 +453,7 @@ def render_sidebar(supabase: Client, user):
         logout(supabase)
     st.sidebar.markdown("---")
     st.sidebar.caption("CNAB 240 · Banco do Brasil")
-    st.sidebar.caption("Versao interface: 2026.06.11b")
+    st.sidebar.caption("Versao interface: 2026.06.11c")
 
 
 def _render_importacao_clientes(supabase: Client, user_id: str, df_clientes: pd.DataFrame):
