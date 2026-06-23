@@ -153,6 +153,13 @@ def _erro_coluna_status_ausente(exc: Exception) -> bool:
     return "status" in msg and ("column" in msg or "could not find" in msg or "pgrst204" in msg)
 
 
+def _erro_coluna_ausente(exc: Exception, coluna: str) -> bool:
+    msg = str(exc).lower()
+    return coluna.lower() in msg and (
+        "column" in msg or "could not find" in msg or "pgrst204" in msg
+    )
+
+
 def atualizar_status_remessa(
     supabase: Client,
     user_id: str,
@@ -168,6 +175,24 @@ def salvar_remessa(supabase: Client, user_id: str, dados: dict) -> str | None:
     resposta = supabase.table("remessas").insert({**dados, "user_id": user_id}).execute()
     if resposta.data:
         return str(resposta.data[0]["id"])
+    return None
+
+
+def salvar_remessa_resiliente(supabase: Client, user_id: str, dados: dict) -> str | None:
+    """Salva a remessa; se uma coluna opcional ainda não existe no BD, remove e tenta de novo."""
+    dados = dict(dados)
+    colunas_opcionais = ["arquivo_b64", "status"]
+    for _ in range(len(colunas_opcionais) + 1):
+        try:
+            return salvar_remessa(supabase, user_id, dados)
+        except Exception as exc:
+            removeu = False
+            for col in colunas_opcionais:
+                if col in dados and _erro_coluna_ausente(exc, col):
+                    dados.pop(col, None)
+                    removeu = True
+            if not removeu:
+                raise
     return None
 
 

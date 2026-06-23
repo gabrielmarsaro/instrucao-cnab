@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import html as html_lib
 from datetime import datetime
 
@@ -61,6 +62,7 @@ from db import (
     obter_ultima_remessa_com_valores,
     obter_valores_referencia,
     salvar_remessa,
+    salvar_remessa_resiliente,
     salvar_snapshot_valores_remessa,
     secrets_configurados,
     tabela_remessa_valores_disponivel,
@@ -471,7 +473,7 @@ def render_sidebar(supabase: Client, user):
         logout(supabase)
     st.sidebar.markdown("---")
     st.sidebar.caption("CNAB 240 · Banco do Brasil")
-    st.sidebar.caption("Versao interface: 2026.06.11f")
+    st.sidebar.caption("Versao interface: 2026.06.12a")
 
 
 def _render_importacao_clientes(supabase: Client, user_id: str, df_clientes: pd.DataFrame):
@@ -1030,18 +1032,12 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                     "instrucoes": instrucoes,
                     "preview_linhas": preview,
                     "status": STATUS_REMESSA_GERADA,
+                    "arquivo_b64": base64.b64encode(arquivo_bytes).decode("ascii"),
                 }
                 try:
-                    remessa_id_salva = salvar_remessa(supabase, user_id, dados_remessa)
-                except Exception as exc:
-                    if _erro_coluna_status_ausente(exc):
-                        dados_remessa.pop("status", None)
-                        try:
-                            remessa_id_salva = salvar_remessa(supabase, user_id, dados_remessa)
-                        except Exception:
-                            pass
-                    else:
-                        pass
+                    remessa_id_salva = salvar_remessa_resiliente(supabase, user_id, dados_remessa)
+                except Exception:
+                    pass
 
                 if remessa_id_salva and resultado.valores_enviados:
                     try:
@@ -1210,14 +1206,36 @@ def render_historico(supabase: Client, user_id: str):
     st.divider()
 
     if "nome_arquivo" in df_remessas.columns:
+        st.subheader("Baixar / visualizar remessa")
         arquivo_sel = st.selectbox(
-            "Ver preview de uma remessa:",
+            "Selecione a remessa:",
             df_remessas["nome_arquivo"].tolist(),
         )
         registro = df_remessas[df_remessas["nome_arquivo"] == arquivo_sel].iloc[0]
+
+        arquivo_b64 = registro.get("arquivo_b64")
+        if arquivo_b64:
+            try:
+                arquivo_bytes = base64.b64decode(str(arquivo_b64))
+                st.download_button(
+                    label="⬇️ Baixar arquivo completo (.rem)",
+                    data=arquivo_bytes,
+                    file_name=str(arquivo_sel),
+                    mime="application/octet-stream",
+                    type="primary",
+                    key="btn_redownload_remessa",
+                )
+            except Exception:
+                st.warning("Não foi possível reconstruir o arquivo desta remessa.")
+        else:
+            st.info(
+                "Esta remessa foi gerada antes do armazenamento do arquivo completo. "
+                "Remessas novas (após a migration 006) terão o download disponível aqui."
+            )
+
         preview = registro.get("preview_linhas") or []
         if preview:
-            st.caption("Preview CNAB salvo")
+            st.caption("Preview CNAB salvo (primeiras linhas)")
             df_preview = pd.DataFrame(
                 {
                     "Linha": list(range(1, len(preview) + 1)),
