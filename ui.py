@@ -29,6 +29,7 @@ from config import (
     PREVIEW_LINHAS,
     REF_VALORES_ESCOLHER,
     REF_VALORES_ULTIMA,
+    STATUS_REMESSA_ACEITA,
     STATUS_REMESSA_GERADA,
     STATUS_REMESSA_LABELS,
     STATUS_REMESSA_OPCOES,
@@ -415,7 +416,7 @@ def render_sidebar(supabase: Client, user):
         logout(supabase)
     st.sidebar.markdown("---")
     st.sidebar.caption("CNAB 240 · Banco do Brasil")
-    st.sidebar.caption("Versao interface: 2026.06.11a")
+    st.sidebar.caption("Versao interface: 2026.06.11b")
 
 
 def _render_importacao_clientes(supabase: Client, user_id: str, df_clientes: pd.DataFrame):
