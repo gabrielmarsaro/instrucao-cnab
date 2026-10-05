@@ -42,33 +42,41 @@ from config import (
 )
 from db import (
     _erro_coluna_status_ausente,
+    aceitar_convite,
     atualizar_cliente,
     atualizar_convenio,
     atualizar_status_remessa,
     atualizar_valor_nominal_titulo,
     contar_remessas_convenio,
+    convidar_para_base,
     criar_cliente,
     criar_clientes_lote,
     criar_convenio,
     excluir_clientes,
     excluir_convenio,
     excluir_titulo_valor,
+    listar_bases_compartilhadas,
     listar_clientes,
+    listar_compartilhamentos_dono,
     listar_convenios,
+    listar_convites_pendentes,
     listar_remessas,
     listar_remessas_com_valores,
     listar_remessas_por_convenio,
     listar_titulos_valores,
     obter_ultima_remessa_com_valores,
     obter_valores_referencia,
+    remover_compartilhamento,
     salvar_remessa,
     salvar_remessa_resiliente,
     salvar_snapshot_valores_remessa,
     secrets_configurados,
+    tabela_compartilhamentos_disponivel,
     tabela_remessa_valores_disponivel,
     traduzir_erro_db,
     upsert_titulos_valores,
     MENSAGEM_MIGRATION_004,
+    MENSAGEM_MIGRATION_007,
 )
 from validation import (
     mapear_colunas_clientes,
@@ -461,10 +469,146 @@ def _mapa_convenios(df: pd.DataFrame) -> dict[str, str]:
     return mapa
 
 
+def _rotulo_base(meu_id: str, base_id: str, dono_email: str | None) -> str:
+    if str(base_id) == str(meu_id):
+        return "Minha base"
+    email = (dono_email or "").strip() or "outro usuario"
+    return f"Base compartilhada: {email}"
+
+
+def _bases_acessiveis(supabase: Client, user) -> list[dict]:
+    bases = [{"id": str(user.id), "label": "Minha base"}]
+    df = listar_bases_compartilhadas(supabase, str(user.id))
+    if df.empty:
+        return bases
+    vistos = {str(user.id)}
+    for _, row in df.iterrows():
+        dono_id = str(row.get("dono_id") or "")
+        if not dono_id or dono_id in vistos:
+            continue
+        vistos.add(dono_id)
+        bases.append(
+            {
+                "id": dono_id,
+                "label": _rotulo_base(str(user.id), dono_id, row.get("dono_email")),
+            }
+        )
+    return bases
+
+
+def _garantir_workspace(user, bases: list[dict]) -> str:
+    ids = [b["id"] for b in bases]
+    atual = str(st.session_state.get("workspace_user_id") or user.id)
+    if atual not in ids:
+        atual = str(user.id)
+        st.session_state.workspace_user_id = atual
+    return atual
+
+
+def render_compartilhamento(supabase: Client, user, workspace_user_id: str):
+    st.sidebar.markdown("### Compartilhar base")
+    if not tabela_compartilhamentos_disponivel(supabase):
+        st.sidebar.warning(MENSAGEM_MIGRATION_007)
+        return
+
+    meu_id = str(user.id)
+    meu_email = str(getattr(user, "email", "") or "")
+
+    convites = listar_convites_pendentes(supabase, meu_email)
+    if not convites.empty:
+        st.sidebar.info("Voce recebeu um convite para usar a base de outro usuario.")
+        for _, convite in convites.iterrows():
+            dono_email = convite.get("dono_email") or "usuario"
+            convite_id = str(convite["id"])
+            st.sidebar.caption(f"De: {dono_email}")
+            c1, c2 = st.sidebar.columns(2)
+            if c1.button("Aceitar", key=f"aceitar_{convite_id}", use_container_width=True):
+                try:
+                    aceitar_convite(supabase, convite_id, meu_id)
+                    st.session_state.workspace_user_id = str(convite.get("dono_id") or meu_id)
+                    st.session_state.pop("sel_base_dados", None)
+                    st.session_state.lotes = []
+                    st.session_state.remessa_gerada = None
+                    st.sidebar.success("Convite aceito.")
+                    st.rerun()
+                except Exception as exc:
+                    st.sidebar.error(traduzir_erro_db(exc))
+            if c2.button("Recusar", key=f"recusar_{convite_id}", use_container_width=True):
+                try:
+                    remover_compartilhamento(supabase, convite_id)
+                    st.rerun()
+                except Exception as exc:
+                    st.sidebar.error(traduzir_erro_db(exc))
+
+    sou_dono_da_base = workspace_user_id == meu_id
+    if not sou_dono_da_base:
+        st.sidebar.caption(
+            "Voce esta na base de outro usuario. "
+            "Somente o dono convida ou remove pessoas."
+        )
+        if st.sidebar.button("Sair desta base compartilhada", key="sair_base_compartilhada"):
+            st.session_state.workspace_user_id = meu_id
+            st.session_state.pop("sel_base_dados", None)
+            st.session_state.lotes = []
+            st.session_state.remessa_gerada = None
+            st.rerun()
+        return
+
+    email_convite = st.sidebar.text_input(
+        "E-mail para compartilhar",
+        key="email_compartilhar",
+        placeholder="pessoa@empresa.com",
+    )
+    if st.sidebar.button("Enviar convite", type="primary", use_container_width=True, key="btn_convidar"):
+        try:
+            convidar_para_base(supabase, meu_id, meu_email, email_convite)
+            st.sidebar.success("Convite enviado. A outra pessoa precisa entrar no app e aceitar.")
+            st.rerun()
+        except ValueError as exc:
+            st.sidebar.error(str(exc))
+        except Exception as exc:
+            st.sidebar.error(traduzir_erro_db(exc))
+
+    df_shares = listar_compartilhamentos_dono(supabase, meu_id)
+    if df_shares.empty:
+        st.sidebar.caption("Ninguem mais tem acesso a sua base.")
+        return
+
+    st.sidebar.caption("Quem tem acesso")
+    for _, row in df_shares.iterrows():
+        status = str(row.get("status") or "")
+        label_status = "Aceito" if status == "aceito" else "Aguardando aceite"
+        email = row.get("convidado_email") or ""
+        share_id = str(row["id"])
+        st.sidebar.write(f"{email} — {label_status}")
+        if st.sidebar.button("Revogar", key=f"revogar_{share_id}"):
+            try:
+                remover_compartilhamento(supabase, share_id)
+                st.rerun()
+            except Exception as exc:
+                st.sidebar.error(traduzir_erro_db(exc))
+
+
 def render_sidebar(supabase: Client, user):
     st.sidebar.markdown("### Menu")
     st.sidebar.write(f"👤 **{user.email}**")
     st.sidebar.divider()
+
+    bases = _bases_acessiveis(supabase, user)
+    workspace_user_id = _garantir_workspace(user, bases)
+    if len(bases) > 1:
+        labels = [b["label"] for b in bases]
+        ids = [b["id"] for b in bases]
+        indice = ids.index(workspace_user_id) if workspace_user_id in ids else 0
+        escolhido = st.sidebar.selectbox("Base de dados", labels, index=indice, key="sel_base_dados")
+        novo_id = ids[labels.index(escolhido)]
+        if novo_id != workspace_user_id:
+            st.session_state.workspace_user_id = novo_id
+            st.session_state.lotes = []
+            st.session_state.remessa_gerada = None
+            st.rerun()
+        workspace_user_id = novo_id
+
     if st.sidebar.button("Atualizar tela", use_container_width=True, help="Recarrega o app (use isto em vez de Ctrl+F5)"):
         st.cache_data.clear()
         st.cache_resource.clear()
@@ -472,8 +616,11 @@ def render_sidebar(supabase: Client, user):
     if st.sidebar.button("🚪 Sair", use_container_width=True):
         logout(supabase)
     st.sidebar.markdown("---")
+    render_compartilhamento(supabase, user, workspace_user_id)
+    st.sidebar.markdown("---")
     st.sidebar.caption("CNAB 240 · Banco do Brasil")
-    st.sidebar.caption("Versao interface: 2026.06.12a")
+    st.sidebar.caption("Versao interface: 2026.10.05a")
+    return workspace_user_id
 
 
 def _render_importacao_clientes(supabase: Client, user_id: str, df_clientes: pd.DataFrame):
@@ -1347,12 +1494,18 @@ def render_valores_nominais(
 def render_app(supabase: Client):
     aplicar_estilo()
     user = st.session_state.user
-    render_sidebar(supabase, user)
+    user_id = render_sidebar(supabase, user)
 
     st.markdown('<p class="main-header">🏦 Gerador de Remessa CNAB 240</p>', unsafe_allow_html=True)
     st.markdown('<p class="sub-header">Banco do Brasil — instruções em lote</p>', unsafe_allow_html=True)
 
-    user_id = user.id
+    if str(user_id) != str(user.id):
+        bases = _bases_acessiveis(supabase, user)
+        rotulo = next((b["label"] for b in bases if b["id"] == str(user_id)), "base compartilhada")
+        st.info(
+            f"Voce esta usando a **{rotulo}**. "
+            "Clientes, convenios, historico e remessas desta base sao os mesmos para todos com acesso."
+        )
 
     try:
         df_clientes = listar_clientes(supabase, user_id)

@@ -13,6 +13,7 @@ def login(supabase: Client, email: str, password: str) -> bool:
     try:
         res = supabase.auth.sign_in_with_password({"email": email.strip(), "password": password})
         st.session_state.user = res.user
+        st.session_state.workspace_user_id = res.user.id if res.user else None
         if res.session:
             st.session_state.access_token = res.session.access_token
             st.session_state.refresh_token = res.session.refresh_token
@@ -76,6 +77,7 @@ def logout(supabase: Client) -> None:
     st.session_state.user = None
     st.session_state.access_token = None
     st.session_state.refresh_token = None
+    st.session_state.workspace_user_id = None
     st.session_state.lotes = []
     st.session_state.remessa_gerada = None
     st.rerun()

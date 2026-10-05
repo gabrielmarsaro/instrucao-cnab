@@ -14,12 +14,134 @@ MENSAGEM_MIGRATION_004 = (
     "Execute o arquivo supabase/migrations/004_remessa_valores.sql no SQL Editor do projeto."
 )
 
+MENSAGEM_MIGRATION_007 = (
+    "O compartilhamento ainda nao esta ativo no Supabase. "
+    "Execute o arquivo supabase/migrations/007_compartilhamento.sql no SQL Editor do projeto."
+)
+
+STATUS_CONVITE_PENDENTE = "pendente"
+STATUS_CONVITE_ACEITO = "aceito"
+
 
 def _erro_tabela_remessa_valores_ausente(exc: Exception) -> bool:
     msg = str(exc).lower()
     return "pgrst205" in msg or (
         "remessa_valores" in msg and ("could not find" in msg or "does not exist" in msg)
     )
+
+
+def _erro_tabela_ausente(exc: Exception, tabela: str) -> bool:
+    msg = str(exc).lower()
+    return "pgrst205" in msg or (
+        tabela.lower() in msg and ("could not find" in msg or "does not exist" in msg)
+    )
+
+
+def tabela_compartilhamentos_disponivel(supabase: Client) -> bool:
+    try:
+        supabase.table("compartilhamentos").select("id").limit(1).execute()
+        return True
+    except Exception as exc:
+        if _erro_tabela_ausente(exc, "compartilhamentos"):
+            return False
+        raise
+
+
+def _normalizar_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+def listar_convites_pendentes(supabase: Client, email: str) -> pd.DataFrame:
+    email_norm = _normalizar_email(email)
+    if not email_norm:
+        return pd.DataFrame()
+    try:
+        resposta = (
+            supabase.table("compartilhamentos")
+            .select("*")
+            .eq("status", STATUS_CONVITE_PENDENTE)
+            .eq("convidado_email", email_norm)
+            .execute()
+        )
+    except Exception as exc:
+        if _erro_tabela_ausente(exc, "compartilhamentos"):
+            return pd.DataFrame()
+        raise
+    return pd.DataFrame(resposta.data or [])
+
+
+def listar_compartilhamentos_dono(supabase: Client, dono_id: str) -> pd.DataFrame:
+    try:
+        resposta = (
+            supabase.table("compartilhamentos")
+            .select("*")
+            .eq("dono_id", dono_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+    except Exception as exc:
+        if _erro_tabela_ausente(exc, "compartilhamentos"):
+            return pd.DataFrame()
+        raise
+    return pd.DataFrame(resposta.data or [])
+
+
+def listar_bases_compartilhadas(supabase: Client, convidado_id: str) -> pd.DataFrame:
+    try:
+        resposta = (
+            supabase.table("compartilhamentos")
+            .select("*")
+            .eq("convidado_id", convidado_id)
+            .eq("status", STATUS_CONVITE_ACEITO)
+            .execute()
+        )
+    except Exception as exc:
+        if _erro_tabela_ausente(exc, "compartilhamentos"):
+            return pd.DataFrame()
+        raise
+    return pd.DataFrame(resposta.data or [])
+
+
+def convidar_para_base(
+    supabase: Client,
+    dono_id: str,
+    dono_email: str,
+    convidado_email: str,
+) -> None:
+    email_norm = _normalizar_email(convidado_email)
+    dono_email_norm = _normalizar_email(dono_email)
+    if not email_norm or "@" not in email_norm:
+        raise ValueError("Informe um e-mail valido para compartilhar.")
+    if email_norm == dono_email_norm:
+        raise ValueError("Voce nao pode compartilhar a base consigo mesmo.")
+
+    existentes = listar_compartilhamentos_dono(supabase, dono_id)
+    if not existentes.empty and "convidado_email" in existentes.columns:
+        ja = existentes["convidado_email"].astype(str).str.strip().str.lower() == email_norm
+        if ja.any():
+            raise ValueError("Este e-mail ja foi convidado para a sua base.")
+
+    supabase.table("compartilhamentos").insert(
+        {
+            "dono_id": dono_id,
+            "dono_email": dono_email_norm,
+            "convidado_email": email_norm,
+            "status": STATUS_CONVITE_PENDENTE,
+        }
+    ).execute()
+
+
+def aceitar_convite(supabase: Client, convite_id: str, convidado_id: str) -> None:
+    supabase.table("compartilhamentos").update(
+        {
+            "status": STATUS_CONVITE_ACEITO,
+            "convidado_id": convidado_id,
+        }
+    ).eq("id", convite_id).execute()
+
+
+def remover_compartilhamento(supabase: Client, convite_id: str) -> None:
+    supabase.table("compartilhamentos").delete().eq("id", convite_id).execute()
 
 
 def tabela_remessa_valores_disponivel(supabase: Client) -> bool:

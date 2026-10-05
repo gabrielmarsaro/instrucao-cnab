@@ -22,6 +22,8 @@ if "access_token" not in st.session_state:
     st.session_state.access_token = None
 if "refresh_token" not in st.session_state:
     st.session_state.refresh_token = None
+if "workspace_user_id" not in st.session_state:
+    st.session_state.workspace_user_id = None
 
 if not secrets_configurados():
     st.error("Credenciais do Supabase não configuradas.")
@@ -57,6 +59,8 @@ def restaurar_sessao(supabase):
         res = supabase.auth.get_user()
         if res and res.user:
             st.session_state.user = res.user
+            if not st.session_state.get("workspace_user_id"):
+                st.session_state.workspace_user_id = res.user.id
     except Exception:
         st.session_state.access_token = None
         st.session_state.refresh_token = None
