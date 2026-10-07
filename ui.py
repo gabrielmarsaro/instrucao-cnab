@@ -22,6 +22,7 @@ from bb_api import (
     HOMOLOG_VARIACAO,
     INSTRUCOES_API_LABEL,
     ResultadoConsultaBoleto,
+    ambientes_bb_para_usuario,
     ativar_credenciais_bb,
     bb_credenciais_configuradas,
     consultar_boleto,
@@ -33,6 +34,7 @@ from bb_api import (
     mensagem_credenciais_bb,
     sincronizar_credenciais_bb_sessao,
     testar_conexao_bb,
+    usuario_pode_homologar,
 )
 from cnab import (
     buscar_valor_registrado,
@@ -1412,18 +1414,21 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
             "Use **CNAB** para o que a API ainda nao cobre. "
             f"API BB agora: **{INSTRUCOES_API_LABEL}**."
         )
-        try:
-            ambiente_bb = str(st.secrets.get("bb", {}).get("ambiente", "")).lower()
-        except Exception:
-            ambiente_bb = ""
-        if ambiente_bb in ("homologacao", "sandbox"):
+        email_user = str(getattr(st.session_state.get("user"), "email", "") or "")
+        cfg_sess = st.session_state.get("bb_credenciais_workspace") or {}
+        amb_ativo = str(cfg_sess.get("ambiente") or "").lower()
+        if usuario_pode_homologar(email_user) and amb_ativo in ("homologacao", "sandbox"):
             st.info(
                 f"**Homologacao BB** — convenio `{HOMOLOG_CONVENIO}`, "
                 f"ag `{HOMOLOG_AGENCIA}`, cc `{HOMOLOG_CONTA}`, "
                 f"carteira `{HOMOLOG_CARTEIRA}/{HOMOLOG_VARIACAO}`. "
-                "Nosso numero na API: `000` + convenio(7) + controle(10) = 20 digitos. "
-                "So **alteracao** e **baixa** (sem gerar boleto pela API). "
+                "Nosso numero API: `000` + convenio(7) + controle(10). "
                 "Alteracao/baixa so apos **30 minutos** da geracao do boleto."
+            )
+        elif amb_ativo == "producao":
+            st.warning(
+                "**Ambiente: PRODUCAO** — as instrucoes enviadas pela API "
+                "alteram boletos reais."
             )
         api_ok = _lotes_so_api(st.session_state.lotes)
         if not api_ok:
@@ -1619,6 +1624,20 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                 ativar_credenciais_bb(creds_cnpj)
                 if not bb_credenciais_configuradas():
                     st.error(mensagem_credenciais_bb(cnpj_conv or "(sem CNPJ no convenio)"))
+                    return
+                email_envio = str(
+                    getattr(st.session_state.get("user"), "email", "") or ""
+                )
+                amb_envio = str((creds_cnpj or {}).get("ambiente") or "").lower()
+                if (
+                    not usuario_pode_homologar(email_envio)
+                    and amb_envio
+                    and amb_envio != "producao"
+                ):
+                    st.error(
+                        "Este usuario so pode usar a API em **producao**. "
+                        "Na aba API BB, salve as credenciais de producao deste CNPJ."
+                    )
                     return
 
                 lotes_atuais = list(st.session_state.lotes)
@@ -2183,33 +2202,35 @@ def render_api_bb(supabase: Client, user_id: str, df_convenios: pd.DataFrame, us
     )
 
     atuais = obter_bb_credenciais(supabase, user_id, cnpj_sel) or {}
-    ambientes = ["sandbox", "homologacao", "producao"]
-    ambiente_atual = str(atuais.get("ambiente") or "homologacao")
+    email_user = str(getattr(user, "email", "") or "") if user is not None else ""
+    pode_dev = usuario_pode_homologar(email_user)
+    ambientes = ambientes_bb_para_usuario(email_user)
+    ambiente_atual = str(atuais.get("ambiente") or "producao").strip().lower()
     if ambiente_atual not in ambientes:
-        ambiente_atual = "homologacao"
+        ambiente_atual = ambientes[0]
 
     sou_dono = True
     if user is not None:
         sou_dono = str(getattr(user, "id", "")) == str(user_id)
 
     if atuais.get("client_id"):
-        st.success(f"Este CNPJ ja tem credenciais ({ambiente_atual}).")
+        st.success(f"Este CNPJ ja tem credenciais ({atuais.get('ambiente') or '?'}).")
+        if not pode_dev and str(atuais.get("ambiente") or "").lower() != "producao":
+            st.error(
+                "Estas credenciais nao sao de **producao**. "
+                "Clientes so podem usar producao — salve de novo com o App Key de producao."
+            )
     else:
         st.warning("Este CNPJ ainda nao tem credenciais da API.")
+
+    if not pode_dev:
+        st.caption("Ambiente disponivel: **producao** (homologacao so para desenvolvimento).")
 
     if not sou_dono:
         st.info(
             "Voce esta em base compartilhada: so o **dono** edita credenciais. "
             "As chaves ja salvas valem para envio/consulta pela API."
         )
-        with st.expander("Dados de homologacao BB (referencia)"):
-            st.markdown(
-                f"""
-- Convenio: `{HOMOLOG_CONVENIO}`
-- Agencia: `{HOMOLOG_AGENCIA}` | Conta: `{HOMOLOG_CONTA}`
-- Carteira: `{HOMOLOG_CARTEIRA}` / variacao `{HOMOLOG_VARIACAO}`
-                """
-            )
         return
 
     with st.form("form_credenciais_bb_cnpj"):
@@ -2228,11 +2249,15 @@ def render_api_bb(supabase: Client, user_id: str, df_convenios: pd.DataFrame, us
             "App Key (gw-dev-app-key)",
             value=str(atuais.get("app_key") or ""),
         )
-        ambiente = st.selectbox(
-            "Ambiente",
-            ambientes,
-            index=ambientes.index(ambiente_atual),
-        )
+        if len(ambientes) == 1:
+            ambiente = ambientes[0]
+            st.text_input("Ambiente", value=ambiente, disabled=True)
+        else:
+            ambiente = st.selectbox(
+                "Ambiente",
+                ambientes,
+                index=ambientes.index(ambiente_atual),
+            )
         col_salvar, col_testar = st.columns(2)
         salvar = col_salvar.form_submit_button("Salvar neste CNPJ", type="primary")
         testar = col_testar.form_submit_button("Testar conexao")
@@ -2304,16 +2329,17 @@ def render_api_bb(supabase: Client, user_id: str, df_convenios: pd.DataFrame, us
             except Exception as exc:
                 st.error(traduzir_erro_db(exc))
 
-    with st.expander("Dados de homologacao BB (referencia)"):
-        st.markdown(
-            f"""
+    if pode_dev:
+        with st.expander("Dados de homologacao BB (referencia — so dev)"):
+            st.markdown(
+                f"""
 - Convenio: `{HOMOLOG_CONVENIO}`
 - Agencia: `{HOMOLOG_AGENCIA}` | Conta: `{HOMOLOG_CONTA}`
 - Carteira: `{HOMOLOG_CARTEIRA}` / variacao `{HOMOLOG_VARIACAO}`
 - Nosso numero API: `000` + convenio(7) + controle(10)
 - Alteracao/baixa: so apos 30 minutos da geracao do boleto
-            """
-        )
+                """
+            )
 
 
 def render_app(supabase: Client):

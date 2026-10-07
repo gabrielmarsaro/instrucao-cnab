@@ -13,6 +13,11 @@ import pandas as pd
 import streamlit as st
 
 from cnab import normalizar_valor_monetario
+from config import (
+    AMBIENTES_BB_CLIENTES,
+    AMBIENTES_BB_TODOS,
+    DEV_EMAILS_PADRAO,
+)
 from validation import limpar_nosso_numero, mapear_colunas_planilha
 
 AMBIENTES = {
@@ -327,12 +332,38 @@ class BbApiError(Exception):
     """Erro de configuração ou autenticação com a API do BB."""
 
 
+def _emails_dev() -> set[str]:
+    emails = {e.strip().lower() for e in DEV_EMAILS_PADRAO if e}
+    try:
+        extra = st.secrets.get("DEV_EMAILS", None)
+        if extra is None:
+            extra = st.secrets.get("bb", {}).get("dev_emails")
+        if isinstance(extra, str):
+            emails.update(p.strip().lower() for p in extra.split(",") if p.strip())
+        elif isinstance(extra, (list, tuple)):
+            emails.update(str(p).strip().lower() for p in extra if str(p).strip())
+    except Exception:
+        pass
+    return emails
+
+
+def usuario_pode_homologar(email: str | None) -> bool:
+    """Sandbox/homologacao so para e-mails de desenvolvimento."""
+    return (email or "").strip().lower() in _emails_dev()
+
+
+def ambientes_bb_para_usuario(email: str | None) -> list[str]:
+    if usuario_pode_homologar(email):
+        return list(AMBIENTES_BB_TODOS)
+    return list(AMBIENTES_BB_CLIENTES)
+
+
 def _cfg_vazia() -> dict:
     return {
         "client_id": "",
         "client_secret": "",
         "app_key": "",
-        "ambiente": "homologacao",
+        "ambiente": "producao",
         "scopes": "",
     }
 
@@ -344,7 +375,7 @@ def _secrets_bb() -> dict:
         "client_id": str(salvas.get("client_id") or "").strip(),
         "client_secret": str(salvas.get("client_secret") or "").strip(),
         "app_key": str(salvas.get("app_key") or "").strip(),
-        "ambiente": str(salvas.get("ambiente") or "homologacao").strip().lower(),
+        "ambiente": str(salvas.get("ambiente") or "producao").strip().lower(),
         "scopes": str(salvas.get("scopes") or "").strip(),
     }
 

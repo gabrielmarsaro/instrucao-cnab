@@ -1,7 +1,16 @@
 """Constantes e configurações do aplicativo."""
 
 # Versao exibida na sidebar / suporte (bump a cada release publicada)
-APP_VERSION = "2026.10.07d"
+APP_VERSION = "2026.10.07e"
+
+# E-mails que podem usar sandbox/homologacao (desenvolvimento).
+# Pode sobrescrever em secrets: DEV_EMAILS = ["a@x.com", "b@y.com"]
+DEV_EMAILS_PADRAO = [
+    "gabrielmarsaro@gmail.com",
+]
+
+AMBIENTES_BB_TODOS = ["sandbox", "homologacao", "producao"]
+AMBIENTES_BB_CLIENTES = ["producao"]
 
 # Rótulos de interface
 # Navegacao principal (radio) — so a view ativa e renderizada
