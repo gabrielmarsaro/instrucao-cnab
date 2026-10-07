@@ -828,7 +828,7 @@ def render_sidebar(supabase: Client, user):
         st.sidebar.caption(f"API BB: {qtd_creds} CNPJ(s) com credencial")
     else:
         st.sidebar.caption("API BB: configure por CNPJ na aba API BB")
-    st.sidebar.caption("Versao interface: 2026.10.06g")
+    st.sidebar.caption("Versao interface: 2026.10.06h")
     return workspace_user_id
 
 
