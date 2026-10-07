@@ -24,6 +24,7 @@ from bb_api import (
     ResultadoConsultaBoleto,
     ativar_credenciais_bb,
     bb_credenciais_configuradas,
+    consultar_boleto,
     consultar_boletos_com_erro,
     dataframe_campos_completos_consultas,
     dataframe_resumo_consultas,
@@ -46,10 +47,17 @@ from config import (
     ABA_CONVENIOS_TAB,
     ABA_HISTORICO_TAB,
     ABA_VALORES_TAB,
+    APP_VERSION,
     FONTE_APP,
-    TITULO_API_BB_HTML,
     INSTRUCOES_CNAB,
     MODOS_REFERENCIA_VALORES,
+    NAV_API_BB,
+    NAV_CLIENTES,
+    NAV_CONVENIOS,
+    NAV_GERADOR,
+    NAV_HISTORICO,
+    NAV_OPCOES,
+    NAV_VALORES,
     PREVIEW_LINHAS,
     REF_VALORES_ESCOLHER,
     REF_VALORES_ULTIMA,
@@ -58,18 +66,22 @@ from config import (
     STATUS_REMESSA_LABELS,
     STATUS_REMESSA_OPCOES,
     STATUS_REMESSA_REJEITADA,
+    TITULO_API_BB_HTML,
     TITULO_GESTAO_CLIENTES_HTML,
     TITULO_GESTAO_CONVENIOS_HTML,
     TITULO_HISTORICO_HTML,
     TITULO_VALORES_NOMINAIS_HTML,
 )
 from db import (
+    MENSAGEM_MIGRATION_004,
+    MENSAGEM_MIGRATION_007,
     _erro_coluna_status_ausente,
     aceitar_convite,
     atualizar_cliente,
     atualizar_convenio,
     atualizar_status_remessa,
     atualizar_valor_nominal_titulo,
+    contar_bb_credenciais_cached,
     contar_remessas_convenio,
     convidar_para_base,
     criar_cliente,
@@ -79,17 +91,21 @@ from db import (
     excluir_clientes,
     excluir_convenio,
     excluir_titulo_valor,
+    invalidar_cache_workspace,
     listar_bases_compartilhadas,
     listar_bb_credenciais,
     listar_clientes,
+    listar_clientes_cached,
     listar_compartilhamentos_dono,
     listar_convenios,
+    listar_convenios_cached,
     listar_convites_pendentes,
     listar_remessas,
     listar_remessas_com_valores,
     listar_remessas_por_convenio,
     listar_titulos_valores,
     normalizar_cnpj_credencial,
+    obter_arquivo_remessa,
     obter_bb_credenciais,
     obter_ultima_remessa_com_valores,
     obter_valores_referencia,
@@ -103,15 +119,43 @@ from db import (
     tabela_remessa_valores_disponivel,
     traduzir_erro_db,
     upsert_titulos_valores,
-    MENSAGEM_MIGRATION_004,
-    MENSAGEM_MIGRATION_007,
 )
 from validation import (
+    limpar_nosso_numero,
     mapear_colunas_clientes,
+    mapear_colunas_planilha,
     preparar_importacao_clientes,
     validar_cnpj_cpf,
     validar_planilha,
 )
+
+
+
+def _filtrar_lotes_sem_nns(lotes: list[dict], nns_ok: set[str]) -> list[dict]:
+    """Remove do carrinho os boletos cujo nosso numero ja foi enviado com sucesso."""
+    if not nns_ok:
+        return lotes
+    novos: list[dict] = []
+    for lote in lotes:
+        df = lote["df"].copy()
+        df.columns = [str(c).strip().lower() for c in df.columns]
+        colunas_map = mapear_colunas_planilha(df)
+        col_nn = colunas_map.get("nn")
+        if not col_nn or col_nn not in df.columns:
+            novos.append(lote)
+            continue
+        mask = ~df[col_nn].map(lambda x: limpar_nosso_numero(x) in nns_ok)
+        df2 = df.loc[mask].copy()
+        if df2.empty:
+            continue
+        novos.append({**lote, "df": df2})
+    return novos
+
+
+def _lotes_so_api(lotes: list[dict]) -> bool:
+    from bb_api import INSTRUCOES_API_SUPORTADAS, codigo_instrucao_lote
+
+    return all(codigo_instrucao_lote(l) in INSTRUCOES_API_SUPORTADAS for l in lotes)
 
 
 def _exibir_ficha_consulta_boleto(consulta: ResultadoConsultaBoleto) -> None:
@@ -255,8 +299,18 @@ def _exibir_resultado_api_tabela():
                 if not bb_credenciais_configuradas():
                     st.error(mensagem_credenciais_bb())
                 else:
-                    with st.spinner(f"Consultando {len(erros)} boleto(s) no BB..."):
-                        consultas = consultar_boletos_com_erro(erros, convenio)
+                    prog = st.progress(0, text="Consultando no BB...")
+
+                    def _on_c(feitos, total, nn):
+                        prog.progress(
+                            min(feitos / total if total else 1.0, 1.0),
+                            text=f"Consulta {feitos}/{total} — {nn or '...'}",
+                        )
+
+                    consultas = consultar_boletos_com_erro(
+                        erros, convenio, on_progress=_on_c
+                    )
+                    prog.progress(1.0, text="Consulta concluida.")
                     st.session_state.ultima_consulta_erros_bb = consultas
                     st.rerun()
             except BbApiError as exc:
@@ -608,9 +662,13 @@ def _preparar_exibicao_importacao(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _tabela_zebra(df: pd.DataFrame, altura_max: int = 720) -> None:
-    """Tabela com zebra, fonte moderna e sem quebra de linha nas células."""
+    """Tabela zebra para poucos registros; st.dataframe para volumes maiores."""
     if df.empty:
         st.info("Nenhum registro para exibir.")
+        return
+
+    if len(df) > 80:
+        st.dataframe(df, use_container_width=True, height=min(altura_max, 560))
         return
 
     estilo_th = (
@@ -810,6 +868,7 @@ def render_sidebar(supabase: Client, user):
         limpar_cache_token_bb()
 
     if st.sidebar.button("Atualizar tela", use_container_width=True, help="Recarrega o app (use isto em vez de Ctrl+F5)"):
+        invalidar_cache_workspace(str(workspace_user_id))
         st.cache_data.clear()
         st.cache_resource.clear()
         st.rerun()
@@ -820,15 +879,14 @@ def render_sidebar(supabase: Client, user):
     st.sidebar.markdown("---")
     st.sidebar.caption("CNAB 240 · Banco do Brasil")
     try:
-        df_creds = listar_bb_credenciais(supabase, str(workspace_user_id))
-        qtd_creds = 0 if df_creds.empty else len(df_creds)
+        qtd_creds = contar_bb_credenciais_cached(supabase, str(workspace_user_id))
     except Exception:
         qtd_creds = 0
     if qtd_creds:
         st.sidebar.caption(f"API BB: {qtd_creds} CNPJ(s) com credencial")
     else:
         st.sidebar.caption("API BB: configure por CNPJ na aba API BB")
-    st.sidebar.caption("Versao interface: 2026.10.06h")
+    st.sidebar.caption(f"Versao interface: {APP_VERSION}")
     return workspace_user_id
 
 
@@ -949,6 +1007,7 @@ def render_clientes(supabase: Client, user_id: str):
                                 "uf": novo_uf.upper() if novo_uf else "",
                             },
                         )
+                        invalidar_cache_workspace(user_id)
                         st.success("Cliente cadastrado com sucesso!")
                         st.rerun()
                     except Exception as exc:
@@ -998,6 +1057,7 @@ def render_clientes(supabase: Client, user_id: str):
                                     "uf": edit_uf,
                                 },
                             )
+                            invalidar_cache_workspace(user_id)
                             st.success("Cliente atualizado!")
                             st.rerun()
                         except Exception as exc:
@@ -1018,6 +1078,7 @@ def render_clientes(supabase: Client, user_id: str):
                 if st.button("🚨 Confirmar Exclusão", type="primary"):
                     try:
                         excluir_clientes(supabase, [mapa_clientes[c] for c in clientes_excluir])
+                        invalidar_cache_workspace(user_id)
                         st.success("Clientes excluídos!")
                         st.rerun()
                     except Exception as exc:
@@ -1083,6 +1144,7 @@ def render_convenios(supabase: Client, user_id: str):
                                 "variacao": novo_variacao,
                             },
                         )
+                        invalidar_cache_workspace(user_id)
                         st.success("Convênio cadastrado!")
                         st.rerun()
                     except Exception as exc:
@@ -1128,6 +1190,7 @@ def render_convenios(supabase: Client, user_id: str):
                                     "variacao": edit_variacao,
                                 },
                             )
+                            invalidar_cache_workspace(user_id)
                             st.success("Convênio atualizado!")
                             st.rerun()
                         except Exception as exc:
@@ -1143,6 +1206,7 @@ def render_convenios(supabase: Client, user_id: str):
                 if st.button("🚨 Confirmar Exclusão do Convênio", type="primary"):
                     try:
                         excluir_convenio(supabase, mapa_convenios[conv_excluir])
+                        invalidar_cache_workspace(user_id)
                         st.success("Convênio excluído!")
                         st.rerun()
                     except Exception as exc:
@@ -1251,6 +1315,17 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
     nova_data_str = ""
     if instrucao.startswith("06"):
         nova_data_str = st.text_input("Nova Data Vencimento (DD/MM/AAAA):")
+    dias_protesto = 3
+    if instrucao.startswith("09"):
+        dias_protesto = int(
+            st.number_input(
+                "Dias para protesto (API)",
+                min_value=1,
+                max_value=99,
+                value=3,
+                key="dias_protesto_lote",
+            )
+        )
 
     if st.button("➕ Adicionar ao Lote"):
         st.session_state.feedback_geracao = None
@@ -1281,6 +1356,7 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                     {
                         "instrucao": instrucao,
                         "nova_data": nova_data_str,
+                        "dias_protesto": dias_protesto,
                         "df": df_lote,
                         "nome_arquivo": arquivo_boletos.name,
                     }
@@ -1334,6 +1410,13 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                 "So **alteracao** e **baixa** (sem gerar boleto pela API). "
                 "Alteracao/baixa so apos **30 minutos** da geracao do boleto."
             )
+        api_ok = _lotes_so_api(st.session_state.lotes)
+        if not api_ok:
+            st.warning(
+                "Algum lote tem instrucao **fora da API**. "
+                "Use **CNAB** para esses, ou remova do carrinho. "
+                f"API: {INSTRUCOES_API_LABEL}."
+            )
         col_cnab, col_api = st.columns(2)
         gerar_cnab = col_cnab.button(
             "📄 Gerar Remessa CNAB",
@@ -1345,6 +1428,7 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
             "🌐 Enviar via API BB",
             use_container_width=True,
             key="btn_enviar_api_bb",
+            disabled=not api_ok,
         )
 
         if gerar_cnab:
@@ -1420,10 +1504,18 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                     "status": STATUS_REMESSA_GERADA,
                     "arquivo_b64": base64.b64encode(arquivo_bytes).decode("ascii"),
                 }
+                avisos_persistencia: list[str] = []
                 try:
                     remessa_id_salva = salvar_remessa_resiliente(supabase, user_id, dados_remessa)
-                except Exception:
-                    pass
+                    if not remessa_id_salva:
+                        avisos_persistencia.append(
+                            "Arquivo gerado, mas a remessa nao foi gravada no historico."
+                        )
+                except Exception as exc:
+                    remessa_id_salva = None
+                    avisos_persistencia.append(
+                        f"Arquivo gerado, mas falhou ao gravar no historico: {traduzir_erro_db(exc)}"
+                    )
 
                 if remessa_id_salva and resultado.valores_enviados:
                     try:
@@ -1434,8 +1526,10 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                             remessa_id_salva,
                             resultado.valores_enviados,
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        avisos_persistencia.append(
+                            f"Snapshot de valores nao gravado: {traduzir_erro_db(exc)}"
+                        )
 
                 if resultado.titulos_atualizar:
                     try:
@@ -1445,8 +1539,10 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                             convenio_id,
                             resultado.titulos_atualizar,
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        avisos_persistencia.append(
+                            f"Valores nominais nao gravados: {traduzir_erro_db(exc)}"
+                        )
 
                 st.session_state.lotes = []
                 st.session_state.feedback_lote = None
@@ -1457,7 +1553,7 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
 
                 msg_ok = f"Arquivo **{nome_arquivo}** gerado!"
                 correcoes = list(resultado.avisos_correcao)
-                avisos_geracao: list[str] = []
+                avisos_geracao: list[str] = list(avisos_persistencia)
                 if descricao_ref:
                     avisos_geracao.append(f"Referencia de valores: {descricao_ref}.")
                 qtd_registrados = sum(
@@ -1530,15 +1626,28 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                         f"Nao foi possivel consultar valores de referencia: {exc}"
                     )
 
-                with st.spinner(
-                    f"Enviando via API BB (CNPJ {cnpj_conv}, ambiente "
-                    f"{(creds_cnpj or {}).get('ambiente', '?')})..."
-                ):
-                    resultado_api = enviar_lotes_api(
-                        lotes_atuais,
-                        dados_bancarios,
-                        valores_conhecidos=valores_conhecidos,
+                progress = st.progress(0, text="Enviando via API BB...")
+                status_txt = st.empty()
+
+                def _on_prog(feitos, total, nn):
+                    frac = (feitos / total) if total else 1.0
+                    progress.progress(
+                        min(frac, 1.0),
+                        text=f"API BB {feitos}/{total} — {nn or '...'}",
                     )
+                    status_txt.caption(
+                        f"CNPJ {cnpj_conv} · {(creds_cnpj or {}).get('ambiente', '?')}"
+                    )
+
+                ja_ok = set(st.session_state.get("api_nn_enviados_ok") or [])
+                resultado_api = enviar_lotes_api(
+                    lotes_atuais,
+                    dados_bancarios,
+                    valores_conhecidos=valores_conhecidos,
+                    on_progress=_on_prog,
+                    pular_nosso_numeros=ja_ok,
+                )
+                progress.progress(1.0, text="Envio concluido.")
 
                 erros_api = [
                     f"{linha.nosso_numero}: {linha.mensagem}"
@@ -1622,12 +1731,24 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                             remessa_id_api,
                             resultado_api.valores_enviados,
                         )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    avisos_api.append(
+                        f"Envio processado, mas falhou ao gravar no historico: "
+                        f"{traduzir_erro_db(exc)}"
+                    )
+
+                nns_ok_agora = {
+                    limpar_nosso_numero(l.nosso_numero)
+                    for l in resultado_api.linhas
+                    if l.sucesso and l.nosso_numero
+                }
+                ja_ok |= nns_ok_agora
+                st.session_state.api_nn_enviados_ok = list(ja_ok)
 
                 if resultado_api.sucessos and resultado_api.falhas == 0:
                     st.session_state.lotes = []
                     st.session_state.feedback_lote = None
+                    st.session_state.api_nn_enviados_ok = []
                     st.session_state.feedback_geracao = {
                         "sucesso": True,
                         "mensagem": (
@@ -1638,11 +1759,15 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                         "avisos": avisos_api,
                     }
                 elif resultado_api.sucessos:
+                    st.session_state.lotes = _filtrar_lotes_sem_nns(
+                        list(st.session_state.lotes), nns_ok_agora
+                    )
                     st.session_state.feedback_geracao = {
                         "sucesso": True,
                         "mensagem": (
                             f"API BB: **{resultado_api.sucessos}** ok, "
-                            f"**{resultado_api.falhas}** com erro. Veja a tabela abaixo."
+                            f"**{resultado_api.falhas}** com erro. "
+                            "Boletos OK sairam do carrinho — reenvie so os erros."
                         ),
                         "erros": erros_api,
                         "avisos": avisos_api,
@@ -1669,6 +1794,28 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
         st.error(aviso_busca)
 
     _exibir_feedback_lote("feedback_geracao", "Ver outros detalhes")
+
+    with st.expander("Consulta avulsa no BB (por nosso numero)"):
+        st.caption("Consulta GET do titulo no convenio selecionado acima.")
+        nn_avulso = st.text_input("Nosso numero", key="consulta_avulsa_nn")
+        if st.button("Consultar boleto", key="btn_consulta_avulsa_bb"):
+            try:
+                dados_b = dados_conv_sel.to_dict()
+                cnpj_a = normalizar_cnpj_credencial(str(dados_b.get("cnpj") or ""))
+                creds_a = obter_bb_credenciais(supabase, user_id, cnpj_a) if cnpj_a else None
+                ativar_credenciais_bb(creds_a)
+                conv = "".join(filter(str.isdigit, str(dados_b.get("convenio", ""))))
+                from bb_api import montar_numero_titulo_cliente
+
+                bid = montar_numero_titulo_cliente(conv, nn_avulso)
+                with st.spinner("Consultando..."):
+                    cons = consultar_boleto(bid, conv, nosso_numero=limpar_nosso_numero(nn_avulso))
+                st.session_state.ultima_consulta_erros_bb = [cons]
+                st.rerun()
+            except BbApiError as exc:
+                st.error(str(exc))
+            except Exception as exc:
+                st.error(str(exc))
 
     ultimo = st.session_state.get("ultimo_arquivo_remessa")
     if ultimo:
@@ -1763,7 +1910,13 @@ def render_historico(supabase: Client, user_id: str):
         )
         registro = df_remessas[df_remessas["nome_arquivo"] == arquivo_sel].iloc[0]
 
-        arquivo_b64 = registro.get("arquivo_b64")
+        remessa_id_dl = str(registro.get("id") or "")
+        arquivo_b64 = None
+        if remessa_id_dl:
+            try:
+                arquivo_b64 = obter_arquivo_remessa(supabase, user_id, remessa_id_dl)
+            except Exception as exc:
+                st.warning(f"Nao foi possivel buscar o arquivo: {traduzir_erro_db(exc)}")
         if arquivo_b64:
             try:
                 arquivo_bytes = base64.b64decode(str(arquivo_b64))
@@ -1778,10 +1931,17 @@ def render_historico(supabase: Client, user_id: str):
             except Exception:
                 st.warning("Não foi possível reconstruir o arquivo desta remessa.")
         else:
-            st.info(
-                "Esta remessa foi gerada antes do armazenamento do arquivo completo. "
-                "Remessas novas (após a migration 006) terão o download disponível aqui."
-            )
+            canal = "API" if str(arquivo_sel).startswith("api_bb_") else "CNAB"
+            if canal == "API":
+                st.info(
+                    "Remessa gerada via **API BB** (sem arquivo CNAB). "
+                    "Use a tabela de resultado / consulta na aba Gerar Remessa."
+                )
+            else:
+                st.info(
+                    "Arquivo CNAB nao disponivel nesta remessa "
+                    "(gerada antes da migration 006 ou nao gravado)."
+                )
 
         preview = registro.get("preview_linhas") or []
         if preview:
@@ -1914,7 +2074,7 @@ def _cnpjs_dos_convenios(df_convenios: pd.DataFrame) -> pd.DataFrame:
     return agrupado.sort_values("razao_social", na_position="last").reset_index(drop=True)
 
 
-def render_api_bb(supabase: Client, user_id: str, df_convenios: pd.DataFrame):
+def render_api_bb(supabase: Client, user_id: str, df_convenios: pd.DataFrame, user=None):
     _render_titulo(TITULO_API_BB_HTML)
     st.caption(
         "Cole as credenciais do Portal Developers BB **por CNPJ**. "
@@ -1976,10 +2136,29 @@ def render_api_bb(supabase: Client, user_id: str, df_convenios: pd.DataFrame):
     if ambiente_atual not in ambientes:
         ambiente_atual = "homologacao"
 
+    sou_dono = True
+    if user is not None:
+        sou_dono = str(getattr(user, "id", "")) == str(user_id)
+
     if atuais.get("client_id"):
-        st.success(f"Este CNPJ ja tem credenciais ({ambiente_atual}). Voce pode atualizar abaixo.")
+        st.success(f"Este CNPJ ja tem credenciais ({ambiente_atual}).")
     else:
         st.warning("Este CNPJ ainda nao tem credenciais da API.")
+
+    if not sou_dono:
+        st.info(
+            "Voce esta em base compartilhada: so o **dono** edita credenciais. "
+            "As chaves ja salvas valem para envio/consulta pela API."
+        )
+        with st.expander("Dados de homologacao BB (referencia)"):
+            st.markdown(
+                f"""
+- Convenio: `{HOMOLOG_CONVENIO}`
+- Agencia: `{HOMOLOG_AGENCIA}` | Conta: `{HOMOLOG_CONTA}`
+- Carteira: `{HOMOLOG_CARTEIRA}` / variacao `{HOMOLOG_VARIACAO}`
+                """
+            )
+        return
 
     with st.form("form_credenciais_bb_cnpj"):
         client_id = st.text_input(
@@ -1989,8 +2168,9 @@ def render_api_bb(supabase: Client, user_id: str, df_convenios: pd.DataFrame):
         )
         client_secret = st.text_input(
             "Client Secret",
-            value=str(atuais.get("client_secret") or ""),
+            value="",
             type="password",
+            help="Deixe em branco para manter o secret ja salvo.",
         )
         app_key = st.text_input(
             "App Key (gw-dev-app-key)",
@@ -2027,6 +2207,7 @@ def render_api_bb(supabase: Client, user_id: str, df_convenios: pd.DataFrame):
                     "scopes": "",
                 }
             )
+            invalidar_cache_workspace(user_id)
             st.success(f"Credenciais salvas para o CNPJ {cnpj_sel}.")
             st.rerun()
         except ValueError as exc:
@@ -2035,15 +2216,19 @@ def render_api_bb(supabase: Client, user_id: str, df_convenios: pd.DataFrame):
             st.error(traduzir_erro_db(exc))
             st.info(
                 "Se a tabela nao existe, execute no SQL Editor: "
-                "`supabase/migrations/008_bb_credenciais.sql`"
+                "`supabase/migrations/008_bb_credenciais.sql` "
+                "e `009_bb_credenciais_owner_write.sql`."
             )
 
     if testar:
+        secret_teste = client_secret.strip()
+        if not secret_teste and atuais.get("client_secret"):
+            secret_teste = str(atuais.get("client_secret") or "")
         ativar_credenciais_bb(
             {
                 "cnpj": cnpj_sel,
                 "client_id": client_id.strip(),
-                "client_secret": client_secret.strip(),
+                "client_secret": secret_teste,
                 "app_key": app_key.strip(),
                 "ambiente": ambiente,
                 "scopes": "",
@@ -2061,6 +2246,7 @@ def render_api_bb(supabase: Client, user_id: str, df_convenios: pd.DataFrame):
                 excluir_bb_credenciais(supabase, user_id, cnpj_sel)
                 sincronizar_credenciais_bb_sessao(None)
                 limpar_cache_token_bb()
+                invalidar_cache_workspace(user_id)
                 st.success("Credenciais removidas deste CNPJ.")
                 st.rerun()
             except Exception as exc:
@@ -2091,52 +2277,43 @@ def render_app(supabase: Client):
         rotulo = next((b["label"] for b in bases if b["id"] == str(user_id)), "base compartilhada")
         st.info(
             f"Voce esta usando a **{rotulo}**. "
-            "Clientes, convenios, historico, remessas e **credenciais API por CNPJ** "
-            "desta base sao os mesmos para todos com acesso."
+            "Clientes, convenios, historico e remessas sao compartilhados. "
+            "So o **dono** edita credenciais API; convidados podem usar a API."
         )
 
-    try:
-        df_clientes = listar_clientes(supabase, user_id)
-    except Exception:
-        df_clientes = pd.DataFrame()
-
-    try:
-        df_convenios = listar_convenios(supabase, user_id)
-    except Exception:
-        df_convenios = pd.DataFrame()
-
-    (
-        aba_gerador,
-        aba_clientes,
-        aba_convenios,
-        aba_api_bb,
-        aba_valores,
-        aba_historico,
-    ) = st.tabs(
-        [
-            "Gerar Remessa",
-            "Meus Clientes",
-            ABA_CONVENIOS_TAB,
-            ABA_API_BB_TAB,
-            ABA_VALORES_TAB,
-            ABA_HISTORICO_TAB,
-        ]
+    nav = st.radio(
+        "Navegacao",
+        NAV_OPCOES,
+        horizontal=True,
+        label_visibility="collapsed",
+        key="nav_principal",
     )
 
-    with aba_gerador:
+    erro_lista = None
+    try:
+        df_clientes = listar_clientes_cached(supabase, user_id)
+    except Exception as exc:
+        df_clientes = pd.DataFrame()
+        erro_lista = traduzir_erro_db(exc)
+
+    try:
+        df_convenios = listar_convenios_cached(supabase, user_id)
+    except Exception as exc:
+        df_convenios = pd.DataFrame()
+        erro_lista = traduzir_erro_db(exc)
+
+    if erro_lista and nav in (NAV_GERADOR, NAV_CLIENTES, NAV_CONVENIOS):
+        st.warning(f"Falha ao carregar cadastros: {erro_lista}")
+
+    if nav == NAV_GERADOR:
         render_gerador(supabase, user_id, df_convenios, df_clientes)
-
-    with aba_clientes:
+    elif nav == NAV_CLIENTES:
         render_clientes(supabase, user_id)
-
-    with aba_convenios:
+    elif nav == NAV_CONVENIOS:
         render_convenios(supabase, user_id)
-
-    with aba_api_bb:
-        render_api_bb(supabase, user_id, df_convenios)
-
-    with aba_valores:
+    elif nav == NAV_API_BB:
+        render_api_bb(supabase, user_id, df_convenios, user=user)
+    elif nav == NAV_VALORES:
         render_valores_nominais(supabase, user_id, df_convenios)
-
-    with aba_historico:
+    elif nav == NAV_HISTORICO:
         render_historico(supabase, user_id)

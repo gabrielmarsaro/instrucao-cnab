@@ -38,11 +38,15 @@ def _erro_tabela_ausente(exc: Exception, tabela: str) -> bool:
 
 
 def tabela_compartilhamentos_disponivel(supabase: Client) -> bool:
+    if "cache_tabela_compartilhamentos" in st.session_state:
+        return bool(st.session_state["cache_tabela_compartilhamentos"])
     try:
         supabase.table("compartilhamentos").select("id").limit(1).execute()
+        st.session_state["cache_tabela_compartilhamentos"] = True
         return True
     except Exception as exc:
         if _erro_tabela_ausente(exc, "compartilhamentos"):
+            st.session_state["cache_tabela_compartilhamentos"] = False
             return False
         raise
 
@@ -224,14 +228,24 @@ def salvar_bb_credenciais(
         raise ValueError("Informe o CNPJ do beneficiario.")
     if ambiente not in ("sandbox", "homologacao", "producao"):
         raise ValueError("Ambiente invalido. Use sandbox, homologacao ou producao.")
-    if not client_id.strip() or not client_secret.strip() or not app_key.strip():
-        raise ValueError("Preencha Client ID, Client Secret e App Key.")
+    if not client_id.strip() or not app_key.strip():
+        raise ValueError("Preencha Client ID e App Key.")
+    secret = client_secret.strip()
+    if not secret:
+        existentes = obter_bb_credenciais(supabase, user_id, cnpj_norm)
+        if existentes and existentes.get("client_secret"):
+            secret = existentes["client_secret"]
+        else:
+            raise ValueError(
+                "Informe o Client Secret "
+                "(ou deixe em branco apenas para manter o ja salvo)."
+            )
     payload = {
         "user_id": user_id,
         "cnpj": cnpj_norm,
         "razao_social": (razao_social or "").strip() or None,
         "client_id": client_id.strip(),
-        "client_secret": client_secret.strip(),
+        "client_secret": secret,
         "app_key": app_key.strip(),
         "ambiente": ambiente,
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -249,11 +263,15 @@ def excluir_bb_credenciais(supabase: Client, user_id: str, cnpj: str) -> None:
 
 
 def tabela_remessa_valores_disponivel(supabase: Client) -> bool:
+    if "cache_tabela_remessa_valores" in st.session_state:
+        return bool(st.session_state["cache_tabela_remessa_valores"])
     try:
         supabase.table("remessa_valores").select("id").limit(1).execute()
+        st.session_state["cache_tabela_remessa_valores"] = True
         return True
     except Exception as exc:
         if _erro_tabela_remessa_valores_ausente(exc):
+            st.session_state["cache_tabela_remessa_valores"] = False
             return False
         raise
 
@@ -327,8 +345,10 @@ def atualizar_cliente(supabase: Client, cliente_id: str, dados: dict) -> None:
 
 
 def excluir_clientes(supabase: Client, ids: list[str]) -> None:
-    for cliente_id in ids:
-        supabase.table("clientes").delete().eq("id", cliente_id).execute()
+    ids_limpos = [str(i) for i in ids if i]
+    if not ids_limpos:
+        return
+    supabase.table("clientes").delete().in_("id", ids_limpos).execute()
 
 
 def listar_convenios(supabase: Client, user_id: str) -> pd.DataFrame:
@@ -422,15 +442,60 @@ def salvar_remessa_resiliente(supabase: Client, user_id: str, dados: dict) -> st
     return None
 
 
+COLUNAS_REMESSA_LISTA = (
+    "id,user_id,convenio_id,nome_arquivo,total_lotes,total_boletos,"
+    "instrucoes,preview_linhas,status,created_at"
+)
+
+
 def listar_remessas(supabase: Client, user_id: str) -> pd.DataFrame:
-    resposta = (
-        supabase.table("remessas")
-        .select("*")
-        .eq("user_id", user_id)
-        .order("created_at", desc=True)
-        .execute()
-    )
+    """Lista remessas sem arquivo_b64 (payload leve)."""
+    try:
+        resposta = (
+            supabase.table("remessas")
+            .select(COLUNAS_REMESSA_LISTA)
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+    except Exception as exc:
+        if _erro_coluna_ausente(exc, "status"):
+            resposta = (
+                supabase.table("remessas")
+                .select(
+                    "id,user_id,convenio_id,nome_arquivo,total_lotes,"
+                    "total_boletos,instrucoes,preview_linhas,created_at"
+                )
+                .eq("user_id", user_id)
+                .order("created_at", desc=True)
+                .execute()
+            )
+        else:
+            raise
     return pd.DataFrame(resposta.data or [])
+
+
+def obter_arquivo_remessa(
+    supabase: Client, user_id: str, remessa_id: str
+) -> str | None:
+    """Busca arquivo_b64 sob demanda para download."""
+    try:
+        resposta = (
+            supabase.table("remessas")
+            .select("arquivo_b64")
+            .eq("user_id", user_id)
+            .eq("id", remessa_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        if _erro_coluna_ausente(exc, "arquivo_b64"):
+            return None
+        raise
+    if not resposta.data:
+        return None
+    valor = resposta.data[0].get("arquivo_b64")
+    return str(valor) if valor else None
 
 
 def buscar_valores_titulos(
@@ -797,3 +862,59 @@ def obter_valores_referencia(
 
     valores = buscar_valores_titulos(supabase, user_id, convenio_id, nosso_numeros)
     return valores, "valores atuais registrados"
+
+
+
+def _cache_key(prefix: str, user_id: str) -> str:
+    return f"{prefix}_{user_id}"
+
+
+def invalidar_cache_workspace(user_id: str | None = None) -> None:
+    """Limpa caches de listagens apos CRUD."""
+    prefixos = (
+        "cache_clientes",
+        "cache_convenios",
+        "cache_bb_creds_count",
+    )
+    if user_id:
+        for p in prefixos:
+            st.session_state.pop(_cache_key(p, str(user_id)), None)
+    else:
+        for k in list(st.session_state.keys()):
+            if any(str(k).startswith(p + "_") for p in prefixos):
+                st.session_state.pop(k, None)
+
+
+def listar_clientes_cached(
+    supabase: Client, user_id: str, *, force: bool = False
+) -> pd.DataFrame:
+    key = _cache_key("cache_clientes", str(user_id))
+    if not force and key in st.session_state:
+        return st.session_state[key]
+    df = listar_clientes(supabase, user_id)
+    st.session_state[key] = df
+    return df
+
+
+def listar_convenios_cached(
+    supabase: Client, user_id: str, *, force: bool = False
+) -> pd.DataFrame:
+    key = _cache_key("cache_convenios", str(user_id))
+    if not force and key in st.session_state:
+        return st.session_state[key]
+    df = listar_convenios(supabase, user_id)
+    st.session_state[key] = df
+    return df
+
+
+def contar_bb_credenciais_cached(supabase: Client, user_id: str) -> int:
+    key = _cache_key("cache_bb_creds_count", str(user_id))
+    if key in st.session_state:
+        return int(st.session_state[key])
+    try:
+        df = listar_bb_credenciais(supabase, user_id)
+        qtd = 0 if df.empty else len(df)
+    except Exception:
+        qtd = 0
+    st.session_state[key] = qtd
+    return qtd

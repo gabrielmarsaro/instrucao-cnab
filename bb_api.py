@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -11,11 +12,7 @@ import httpx
 import pandas as pd
 import streamlit as st
 
-from cnab import (
-    buscar_valor_registrado,
-    normalizar_valor_monetario,
-    valores_monetarios_diferem,
-)
+from cnab import normalizar_valor_monetario
 from validation import limpar_nosso_numero, mapear_colunas_planilha
 
 AMBIENTES = {
@@ -513,6 +510,11 @@ def _codigo_instrucao(lote: dict) -> str:
     return str(lote.get("instrucao", "")).split(" - ")[0].strip()
 
 
+def codigo_instrucao_lote(lote: dict) -> str:
+    """Codigo numerico da instrucao do lote (ex.: '47')."""
+    return _codigo_instrucao(lote)
+
+
 def _parse_item_erro_bb(item: dict) -> tuple[str, str, str]:
     """Retorna (codigo, mensagem, providencia)."""
     codigo = str(
@@ -634,12 +636,24 @@ def achatar_dict(dados: Any, prefixo: str = "") -> dict[str, Any]:
     return saida
 
 
+def _deve_retentar_bb(resp: httpx.Response) -> bool:
+    if resp.status_code >= 500:
+        return True
+    try:
+        codigo, _, _ = _extrair_erro_bb_detalhado(resp)
+    except Exception:
+        return False
+    return bool(codigo and str(codigo).startswith("4125718"))
+
+
 def _request_bb(
     method: str,
     path: str,
     *,
     json_body: dict | None = None,
     params_extra: dict | None = None,
+    client: httpx.Client | None = None,
+    max_retries: int = 2,
 ) -> httpx.Response:
     cfg = _secrets_bb()
     urls = _ambiente_urls(cfg["ambiente"])
@@ -649,17 +663,13 @@ def _request_bb(
     if params_extra:
         params.update(params_extra)
 
-    with httpx.Client(timeout=45.0) as client:
-        resp = client.request(
-            method,
-            url,
-            params=params,
-            headers=_headers(token),
-            json=json_body,
-        )
-        # Token expirado: tenta uma vez
-        if resp.status_code == 401:
-            token = obter_token(force=True)
+    own_client = client is None
+    if own_client:
+        client = httpx.Client(timeout=45.0)
+
+    try:
+        resp: httpx.Response | None = None
+        for attempt in range(max_retries + 1):
             resp = client.request(
                 method,
                 url,
@@ -667,7 +677,24 @@ def _request_bb(
                 headers=_headers(token),
                 json=json_body,
             )
-    return resp
+            if resp.status_code == 401:
+                token = obter_token(force=True)
+                resp = client.request(
+                    method,
+                    url,
+                    params=params,
+                    headers=_headers(token),
+                    json=json_body,
+                )
+            if attempt < max_retries and _deve_retentar_bb(resp):
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            return resp
+        assert resp is not None
+        return resp
+    finally:
+        if own_client:
+            client.close()
 
 
 def consultar_boleto(
@@ -679,6 +706,7 @@ def consultar_boleto(
     codigo_bb_instrucao: str = "",
     providencia_instrucao: str = "",
     status_http_instrucao: int | None = None,
+    client: httpx.Client | None = None,
 ) -> ResultadoConsultaBoleto:
     """GET /boletos/{id}?numeroConvenio=... — retorna todos os campos da API."""
     if not bb_credenciais_configuradas():
@@ -704,6 +732,7 @@ def consultar_boleto(
             "GET",
             f"/boletos/{boleto_id}",
             params_extra={"numeroConvenio": int(convenio_raw)},
+            client=client,
         )
     except BbApiError:
         raise
@@ -750,6 +779,8 @@ def consultar_boleto(
 def consultar_boletos_com_erro(
     erros: list[dict | ResultadoLinhaApi],
     numero_convenio: str | int,
+    *,
+    on_progress=None,
 ) -> list[ResultadoConsultaBoleto]:
     """Consulta no BB cada boleto que falhou no envio da instrucao."""
     if not bb_credenciais_configuradas():
@@ -761,68 +792,77 @@ def consultar_boletos_com_erro(
 
     obter_token()
     resultados: list[ResultadoConsultaBoleto] = []
-    for item in erros:
-        if isinstance(item, ResultadoLinhaApi):
-            nn = item.nosso_numero
-            boleto_id = item.boleto_id
-            erro_instrucao = item.mensagem
-            codigo_bb = item.codigo_bb
-            providencia = item.providencia
-            http_inst = item.status_http
-        else:
-            nn = str(item.get("nosso_numero") or "")
-            boleto_id = str(item.get("boleto_id") or "")
-            erro_instrucao = str(item.get("mensagem") or "")
-            codigo_bb = str(item.get("codigo_bb") or "")
-            providencia = str(item.get("providencia") or "")
-            http_raw = item.get("status_http")
-            try:
-                http_inst = int(http_raw) if http_raw not in (None, "") else None
-            except (TypeError, ValueError):
-                http_inst = None
+    total = len(erros)
+    with httpx.Client(timeout=45.0) as client:
+        for idx, item in enumerate(erros, start=1):
+            if isinstance(item, ResultadoLinhaApi):
+                nn = item.nosso_numero
+                boleto_id = item.boleto_id
+                erro_instrucao = item.mensagem
+                codigo_bb = item.codigo_bb
+                providencia = item.providencia
+                http_inst = item.status_http
+            else:
+                nn = str(item.get("nosso_numero") or "")
+                boleto_id = str(item.get("boleto_id") or "")
+                erro_instrucao = str(item.get("mensagem") or "")
+                codigo_bb = str(item.get("codigo_bb") or "")
+                providencia = str(item.get("providencia") or "")
+                http_raw = item.get("status_http")
+                try:
+                    http_inst = int(http_raw) if http_raw not in (None, "") else None
+                except (TypeError, ValueError):
+                    http_inst = None
 
-        meta = {
-            "erro_instrucao": erro_instrucao,
-            "codigo_bb_instrucao": codigo_bb,
-            "providencia_instrucao": providencia,
-            "status_http_instrucao": http_inst,
-        }
+            meta = {
+                "erro_instrucao": erro_instrucao,
+                "codigo_bb_instrucao": codigo_bb,
+                "providencia_instrucao": providencia,
+                "status_http_instrucao": http_inst,
+            }
 
-        if not boleto_id and nn:
-            try:
-                boleto_id = _montar_id_boleto(convenio_raw, nn)
-            except BbApiError as exc:
+            if not boleto_id and nn:
+                try:
+                    boleto_id = _montar_id_boleto(convenio_raw, nn)
+                except BbApiError as exc:
+                    resultados.append(
+                        ResultadoConsultaBoleto(
+                            nosso_numero=nn or "?",
+                            boleto_id="",
+                            sucesso=False,
+                            mensagem=str(exc),
+                            **meta,
+                        )
+                    )
+                    if on_progress:
+                        on_progress(idx, total, nn or "")
+                    continue
+
+            if not boleto_id:
                 resultados.append(
                     ResultadoConsultaBoleto(
                         nosso_numero=nn or "?",
                         boleto_id="",
                         sucesso=False,
-                        mensagem=str(exc),
+                        mensagem="Sem ID API para consultar.",
                         **meta,
                     )
                 )
+                if on_progress:
+                    on_progress(idx, total, nn or "")
                 continue
 
-        if not boleto_id:
             resultados.append(
-                ResultadoConsultaBoleto(
-                    nosso_numero=nn or "?",
-                    boleto_id="",
-                    sucesso=False,
-                    mensagem="Sem ID API para consultar.",
+                consultar_boleto(
+                    boleto_id,
+                    convenio_raw,
+                    nosso_numero=nn,
+                    client=client,
                     **meta,
                 )
             )
-            continue
-
-        resultados.append(
-            consultar_boleto(
-                boleto_id,
-                convenio_raw,
-                nosso_numero=nn,
-                **meta,
-            )
-        )
+            if on_progress:
+                on_progress(idx, total, nn or "")
     return resultados
 
 
@@ -848,6 +888,9 @@ def _executar_instrucao_linha(
     dados_bancarios: dict,
     nova_data: str,
     valores_conhecidos: dict[str, float] | None,
+    *,
+    client: httpx.Client | None = None,
+    dias_protesto: int = 3,
 ) -> tuple[ResultadoLinhaApi, dict | None, dict | None]:
     """
     Retorna (resultado, titulo_atualizar|None, valor_enviado|None).
@@ -878,6 +921,7 @@ def _executar_instrucao_linha(
                 "POST",
                 f"/boletos/{boleto_id}/baixar",
                 json_body={"numeroConvenio": numero_convenio},
+                client=client,
             )
         elif cod in INSTRUCOES_API_SUPORTADAS - {"02"}:
             corpo = _corpo_alteracao_base(numero_convenio)
@@ -921,7 +965,9 @@ def _executar_instrucao_linha(
                 }
             elif cod == "09":
                 corpo["indicadorProtestar"] = "S"
-                corpo["protesto"] = {"quantidadeDiasProtesto": 3}
+                corpo["protesto"] = {
+                    "quantidadeDiasProtesto": max(1, int(dias_protesto or 3))
+                }
             elif cod == "10":
                 corpo["indicadorCancelarProtesto"] = "S"
             else:
@@ -936,22 +982,11 @@ def _executar_instrucao_linha(
                     None,
                 )
 
-            # Correcao automatica de valor: so se NAO houver outra alteracao ja marcada
-            # (BB rejeita mais de uma alteracao na mesma chamada)
-            if valores_conhecidos and cod not in {"47", "02", "06", "09", "10"}:
-                montante_planilha = normalizar_valor_monetario(
-                    row.get(colunas_map.get("montante"))
-                )
-                registrado = buscar_valor_registrado(valores_conhecidos, nn)
-                if (
-                    montante_planilha is not None
-                    and registrado is not None
-                    and valores_monetarios_diferem(montante_planilha, registrado)
-                ):
-                    corpo["indicadorNovoValorNominal"] = "S"
-                    corpo["alteracaoValor"] = {"novoValorNominal": float(registrado)}
-
-            resp = _request_bb("PATCH", f"/boletos/{boleto_id}", json_body=corpo)
+            # BB: uma alteracao por PATCH. Se montante diverge em 06/09/10,
+            # nao corrige aqui — sinaliza no resultado via aviso embutido na mensagem se falhar.
+            resp = _request_bb(
+                "PATCH", f"/boletos/{boleto_id}", json_body=corpo, client=client
+            )
         else:
             return (
                 _resultado_erro(
@@ -1036,6 +1071,9 @@ def enviar_lotes_api(
     lotes: list[dict],
     dados_bancarios: dict,
     valores_conhecidos: dict[str, float] | None = None,
+    *,
+    on_progress=None,
+    pular_nosso_numeros: set[str] | None = None,
 ) -> ResultadoEnvioApi:
     """Envia cada boleto dos lotes para a API Cobranças do BB."""
     resultado = ResultadoEnvioApi()
@@ -1055,7 +1093,6 @@ def enviar_lotes_api(
                 f"Convenio selecionado no app: {convenio_cfg}."
             )
 
-    # Valida instrucoes antes de disparar
     for lote in lotes:
         cod = _codigo_instrucao(lote)
         if cod not in INSTRUCOES_API_SUPORTADAS:
@@ -1064,52 +1101,84 @@ def enviar_lotes_api(
                 f"Suportadas agora: {', '.join(sorted(INSTRUCOES_API_SUPORTADAS))}."
             )
 
-    # Garante token no inicio
     obter_token()
+    pular = {limpar_nosso_numero(n) for n in (pular_nosso_numeros or set()) if n}
 
+    # Conta total para progresso
+    total_previsto = 0
     for lote in lotes:
-        cod = _codigo_instrucao(lote)
-        if cod not in INSTRUCOES_API_SUPORTADAS:
-            df = lote["df"]
-            colunas_map = mapear_colunas_planilha(
-                df.assign(columns={c: str(c).strip().lower() for c in df.columns})
-            )
-            for _, row in df.iterrows():
-                nn = limpar_nosso_numero(row.get(colunas_map.get("nn", ""), ""))
-                resultado.total += 1
-                resultado.falhas += 1
-                resultado.linhas.append(
-                    _resultado_erro(
-                        nn or "?",
-                        f"Instrucao {cod} nao suportada via API. Use o botao CNAB.",
-                        instrucao=cod,
-                    )
+        total_previsto += len(lote.get("df") or [])
+    feitos = 0
+
+    with httpx.Client(timeout=45.0) as client:
+        for lote in lotes:
+            cod = _codigo_instrucao(lote)
+            dias_protesto = int(lote.get("dias_protesto") or 3)
+            if cod not in INSTRUCOES_API_SUPORTADAS:
+                df = lote["df"]
+                colunas_map = mapear_colunas_planilha(
+                    df.assign(columns={c: str(c).strip().lower() for c in df.columns})
                 )
-            continue
+                for _, row in df.iterrows():
+                    nn = limpar_nosso_numero(row.get(colunas_map.get("nn", ""), ""))
+                    resultado.total += 1
+                    resultado.falhas += 1
+                    feitos += 1
+                    resultado.linhas.append(
+                        _resultado_erro(
+                            nn or "?",
+                            f"Instrucao {cod} nao suportada via API. Use o botao CNAB.",
+                            instrucao=cod,
+                        )
+                    )
+                    if on_progress:
+                        on_progress(feitos, total_previsto, nn or "")
+                continue
 
-        df = lote["df"].copy()
-        df.columns = [str(c).strip().lower() for c in df.columns]
-        colunas_map = mapear_colunas_planilha(df)
-        nova_data = lote.get("nova_data") or ""
+            df = lote["df"].copy()
+            df.columns = [str(c).strip().lower() for c in df.columns]
+            colunas_map = mapear_colunas_planilha(df)
+            nova_data = lote.get("nova_data") or ""
 
-        for _, row in df.iterrows():
-            resultado.total += 1
-            linha, titulo, valor_env = _executar_instrucao_linha(
-                cod,
-                row.to_dict(),
-                colunas_map,
-                dados_bancarios,
-                nova_data,
-                valores_conhecidos,
-            )
-            resultado.linhas.append(linha)
-            if linha.sucesso:
-                resultado.sucessos += 1
-                if titulo:
-                    resultado.titulos_atualizar.append(titulo)
-                if valor_env:
-                    resultado.valores_enviados.append(valor_env)
-            else:
-                resultado.falhas += 1
+            for _, row in df.iterrows():
+                resultado.total += 1
+                nn = limpar_nosso_numero(row.get(colunas_map.get("nn", ""), ""))
+                if nn and nn in pular:
+                    feitos += 1
+                    resultado.sucessos += 1
+                    resultado.linhas.append(
+                        ResultadoLinhaApi(
+                            nosso_numero=nn,
+                            sucesso=True,
+                            mensagem="Ignorado: ja enviado com sucesso nesta sessao.",
+                            instrucao=cod,
+                        )
+                    )
+                    if on_progress:
+                        on_progress(feitos, total_previsto, nn)
+                    continue
+
+                linha, titulo, valor_env = _executar_instrucao_linha(
+                    cod,
+                    row.to_dict(),
+                    colunas_map,
+                    dados_bancarios,
+                    nova_data,
+                    valores_conhecidos,
+                    client=client,
+                    dias_protesto=dias_protesto,
+                )
+                resultado.linhas.append(linha)
+                feitos += 1
+                if on_progress:
+                    on_progress(feitos, total_previsto, linha.nosso_numero)
+                if linha.sucesso:
+                    resultado.sucessos += 1
+                    if titulo:
+                        resultado.titulos_atualizar.append(titulo)
+                    if valor_env:
+                        resultado.valores_enviados.append(valor_env)
+                else:
+                    resultado.falhas += 1
 
     return resultado

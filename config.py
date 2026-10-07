@@ -1,11 +1,30 @@
 """Constantes e configurações do aplicativo."""
 
+# Versao exibida na sidebar / suporte (bump a cada release publicada)
+APP_VERSION = "2026.10.07a"
+
 # Rótulos de interface
-# Abas (st.tabs): só ASCII — Chrome trunca/corrompe ê, ó etc. nos botões de aba
-ABA_CONVENIOS_TAB = "Convenios"
-ABA_HISTORICO_TAB = "Historico"
-ABA_VALORES_TAB = "Valores Nominais"
-ABA_API_BB_TAB = "API BB"
+# Navegacao principal (radio) — so a view ativa e renderizada
+NAV_GERADOR = "Gerar Remessa"
+NAV_CLIENTES = "Meus Clientes"
+NAV_CONVENIOS = "Convenios"
+NAV_API_BB = "API BB"
+NAV_VALORES = "Valores Nominais"
+NAV_HISTORICO = "Historico"
+NAV_OPCOES = [
+    NAV_GERADOR,
+    NAV_CLIENTES,
+    NAV_CONVENIOS,
+    NAV_API_BB,
+    NAV_VALORES,
+    NAV_HISTORICO,
+]
+
+# Abas legadas / titulos
+ABA_CONVENIOS_TAB = NAV_CONVENIOS
+ABA_HISTORICO_TAB = NAV_HISTORICO
+ABA_VALORES_TAB = NAV_VALORES
+ABA_API_BB_TAB = NAV_API_BB
 
 # Texto em markdown/mensagens (fora de st.tabs)
 ABA_CONVENIOS = "Conv\u00eanios"
