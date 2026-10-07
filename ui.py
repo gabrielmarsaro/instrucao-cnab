@@ -12,6 +12,18 @@ import streamlit.components.v1 as components
 from supabase import Client
 
 from auth import login, logout, recuperar_senha, sign_up
+from bb_api import (
+    BbApiError,
+    HOMOLOG_AGENCIA,
+    HOMOLOG_CARTEIRA,
+    HOMOLOG_CONTA,
+    HOMOLOG_CONVENIO,
+    HOMOLOG_VARIACAO,
+    INSTRUCOES_API_LABEL,
+    bb_credenciais_configuradas,
+    enviar_lotes_api,
+    mensagem_credenciais_bb,
+)
 from cnab import (
     buscar_valor_registrado,
     coletar_nosso_numeros_lotes,
@@ -619,7 +631,11 @@ def render_sidebar(supabase: Client, user):
     render_compartilhamento(supabase, user, workspace_user_id)
     st.sidebar.markdown("---")
     st.sidebar.caption("CNAB 240 · Banco do Brasil")
-    st.sidebar.caption("Versao interface: 2026.10.05a")
+    if bb_credenciais_configuradas():
+        st.sidebar.caption("API BB: credenciais OK")
+    else:
+        st.sidebar.caption("API BB: credenciais pendentes")
+    st.sidebar.caption("Versao interface: 2026.10.05c")
     return workspace_user_id
 
 
@@ -1108,7 +1124,37 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
             st.rerun()
 
         st.divider()
-        if st.button("🚀 Gerar Arquivo Remessa", type="primary"):
+        st.caption(
+            "Use **CNAB** para o que a API ainda nao cobre. "
+            f"API BB agora: **{INSTRUCOES_API_LABEL}**."
+        )
+        try:
+            ambiente_bb = str(st.secrets.get("bb", {}).get("ambiente", "")).lower()
+        except Exception:
+            ambiente_bb = ""
+        if ambiente_bb in ("homologacao", "sandbox"):
+            st.info(
+                f"**Homologacao BB** — convenio `{HOMOLOG_CONVENIO}`, "
+                f"ag `{HOMOLOG_AGENCIA}`, cc `{HOMOLOG_CONTA}`, "
+                f"carteira `{HOMOLOG_CARTEIRA}/{HOMOLOG_VARIACAO}`. "
+                "Nosso numero na API: `000` + convenio(7) + controle(10) = 20 digitos. "
+                "So **alteracao** e **baixa** (sem gerar boleto pela API). "
+                "Alteracao/baixa so apos **30 minutos** da geracao do boleto."
+            )
+        col_cnab, col_api = st.columns(2)
+        gerar_cnab = col_cnab.button(
+            "📄 Gerar Remessa CNAB",
+            type="primary",
+            use_container_width=True,
+            key="btn_gerar_cnab",
+        )
+        enviar_api = col_api.button(
+            "🌐 Enviar via API BB",
+            use_container_width=True,
+            key="btn_enviar_api_bb",
+        )
+
+        if gerar_cnab:
             try:
                 dados_bancarios = dados_conv_sel.to_dict()
                 try:
@@ -1260,6 +1306,141 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
 
             except Exception as exc:
                 st.error(f"Erro ao gerar arquivo: {traduzir_erro_db(exc)}")
+
+        if enviar_api:
+            try:
+                if not bb_credenciais_configuradas():
+                    st.error(mensagem_credenciais_bb())
+                    return
+
+                dados_bancarios = dados_conv_sel.to_dict()
+                lotes_atuais = list(st.session_state.lotes)
+                convenio_id = convenio_id_sel
+                valores_conhecidos: dict[str, float] = {}
+                descricao_ref = ""
+                nosso_numeros: list[str] = []
+                try:
+                    nosso_numeros = coletar_nosso_numeros_lotes(lotes_atuais)
+                    valores_conhecidos, descricao_ref = obter_valores_referencia(
+                        supabase,
+                        user_id,
+                        convenio_id,
+                        nosso_numeros,
+                        modo_ref_valores,
+                        remessa_ref_id,
+                    )
+                except Exception as exc:
+                    st.session_state.aviso_busca_valores = (
+                        f"Nao foi possivel consultar valores de referencia: {exc}"
+                    )
+
+                with st.spinner("Enviando instrucoes para a API do Banco do Brasil..."):
+                    resultado_api = enviar_lotes_api(
+                        lotes_atuais,
+                        dados_bancarios,
+                        valores_conhecidos=valores_conhecidos,
+                    )
+
+                erros_api = [
+                    f"{linha.nosso_numero}: {linha.mensagem}"
+                    for linha in resultado_api.linhas
+                    if not linha.sucesso
+                ]
+                avisos_api = list(resultado_api.avisos)
+                if descricao_ref:
+                    avisos_api.append(f"Referencia de valores: {descricao_ref}.")
+
+                if resultado_api.titulos_atualizar:
+                    try:
+                        upsert_titulos_valores(
+                            supabase,
+                            user_id,
+                            convenio_id,
+                            resultado_api.titulos_atualizar,
+                        )
+                        avisos_api.append(
+                            f"{len(resultado_api.titulos_atualizar)} valor(es) nominal(is) "
+                            "registrado(s) apos envio pela API."
+                        )
+                    except Exception:
+                        avisos_api.append(
+                            "Envio OK, mas falhou ao gravar valores nominais no Supabase."
+                        )
+
+                preview = [
+                    f"{'OK' if l.sucesso else 'ERRO'} | {l.nosso_numero} | {l.mensagem}"
+                    for l in resultado_api.linhas[:PREVIEW_LINHAS]
+                ]
+                nome_registro = (
+                    f"api_bb_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    f"_{resultado_api.sucessos}ok_{resultado_api.falhas}erro"
+                )
+                try:
+                    remessa_id_api = salvar_remessa_resiliente(
+                        supabase,
+                        user_id,
+                        {
+                            "convenio_id": convenio_id,
+                            "nome_arquivo": nome_registro,
+                            "total_lotes": len(lotes_atuais),
+                            "total_boletos": resultado_api.total,
+                            "instrucoes": [l["instrucao"] for l in lotes_atuais],
+                            "preview_linhas": preview,
+                            "status": (
+                                STATUS_REMESSA_ACEITA
+                                if resultado_api.falhas == 0 and resultado_api.sucessos > 0
+                                else STATUS_REMESSA_GERADA
+                            ),
+                        },
+                    )
+                    if remessa_id_api and resultado_api.valores_enviados:
+                        salvar_snapshot_valores_remessa(
+                            supabase,
+                            user_id,
+                            convenio_id,
+                            remessa_id_api,
+                            resultado_api.valores_enviados,
+                        )
+                except Exception:
+                    pass
+
+                if resultado_api.sucessos and resultado_api.falhas == 0:
+                    st.session_state.lotes = []
+                    st.session_state.feedback_lote = None
+                    st.session_state.feedback_geracao = {
+                        "sucesso": True,
+                        "mensagem": (
+                            f"API BB: **{resultado_api.sucessos}** boleto(s) enviado(s) com sucesso."
+                        ),
+                        "erros": [],
+                        "avisos": avisos_api,
+                    }
+                elif resultado_api.sucessos:
+                    st.session_state.feedback_geracao = {
+                        "sucesso": True,
+                        "mensagem": (
+                            f"API BB: **{resultado_api.sucessos}** ok, "
+                            f"**{resultado_api.falhas}** com erro."
+                        ),
+                        "erros": erros_api,
+                        "avisos": avisos_api,
+                    }
+                else:
+                    st.session_state.feedback_geracao = {
+                        "sucesso": False,
+                        "mensagem": (
+                            f"API BB: nenhum boleto enviado com sucesso "
+                            f"({resultado_api.falhas} erro(s))."
+                        ),
+                        "erros": erros_api,
+                        "avisos": avisos_api,
+                    }
+                st.session_state.feedback_geracao_aberto = False
+                st.rerun()
+            except BbApiError as exc:
+                st.error(str(exc))
+            except Exception as exc:
+                st.error(f"Erro ao enviar pela API do BB: {traduzir_erro_db(exc)}")
 
     aviso_busca = st.session_state.pop("aviso_busca_valores", None)
     if aviso_busca:
