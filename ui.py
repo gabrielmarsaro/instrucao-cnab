@@ -197,17 +197,17 @@ def _exibir_ficha_consulta_boleto(consulta: ResultadoConsultaBoleto) -> None:
         st.info(f"**Próximo passo:** {resumo['Próximo passo']}")
 
     json_boleto = json.dumps(consulta.dados, ensure_ascii=False, indent=2, default=str)
-    st.markdown("##### JSON completo deste boleto")
-    st.code(json_boleto, language="json")
-    st.download_button(
-        "⬇️ Baixar JSON deste boleto",
-        data=json_boleto.encode("utf-8"),
-        file_name=f"boleto_{consulta.nosso_numero or 'consulta'}.json",
-        mime="application/json",
-        key=f"btn_json_boleto_{consulta.boleto_id or consulta.nosso_numero}",
-    )
+    with st.expander("JSON completo deste boleto", expanded=False):
+        st.code(json_boleto, language="json")
+        st.download_button(
+            "⬇️ Baixar JSON deste boleto",
+            data=json_boleto.encode("utf-8"),
+            file_name=f"boleto_{consulta.nosso_numero or 'consulta'}.json",
+            mime="application/json",
+            key=f"btn_json_boleto_{consulta.boleto_id or consulta.nosso_numero}",
+        )
 
-    with st.expander("Tabela de todos os campos (alternativa ao JSON)"):
+    with st.expander("Tabela de todos os campos", expanded=False):
         df_campos = pd.DataFrame(
             [{"Campo": k, "Valor": v} for k, v in consulta.campos_achatados().items()]
         )
@@ -233,17 +233,7 @@ def _exibir_consulta_erros_bb() -> None:
     json_completo = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    col_ver, col_json, col_csv = st.columns(3)
-    with col_ver:
-        if st.button(
-            "📋 Ver JSON completo",
-            use_container_width=True,
-            type="primary",
-            key="btn_ver_json_consulta_bb",
-        ):
-            st.session_state.mostrar_json_consulta_bb = not st.session_state.get(
-                "mostrar_json_consulta_bb", False
-            )
+    col_json, col_csv = st.columns(2)
     with col_json:
         st.download_button(
             "⬇️ Baixar JSON completo",
@@ -263,11 +253,10 @@ def _exibir_consulta_erros_bb() -> None:
             key="btn_csv_consulta_resumo_bb",
         )
 
-    if st.session_state.get("mostrar_json_consulta_bb"):
-        st.markdown("##### JSON completo (todos os boletos consultados)")
+    with st.expander("Ver JSON completo (todos os boletos)", expanded=False):
         st.code(json_completo, language="json")
 
-    with st.expander("Baixar CSV com todos os campos"):
+    with st.expander("Baixar CSV com todos os campos", expanded=False):
         df_full = dataframe_campos_completos_consultas(consultas)
         st.download_button(
             "Baixar completo (CSV)",
@@ -1864,10 +1853,11 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                             bid, conv, nosso_numero=nn_limpo
                         )
                     st.session_state.ultima_consulta_erros_bb = [cons]
-                    st.session_state.mostrar_json_consulta_bb = True
+                    st.session_state.pop("mostrar_json_consulta_bb", None)
                     if cons.sucesso:
                         st.session_state.feedback_consulta_avulsa = (
-                            f"Consulta OK: {nn_limpo}. Resultado e JSON abaixo."
+                            f"Consulta OK: {nn_limpo}. Veja o resumo abaixo "
+                            "(expanda o JSON se quiser)."
                         )
                     else:
                         st.session_state.feedback_consulta_avulsa = (
