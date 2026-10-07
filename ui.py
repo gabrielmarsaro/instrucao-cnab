@@ -346,8 +346,6 @@ def _exibir_resultado_api_tabela():
             except Exception as exc:
                 st.error(f"Falha ao consultar boletos no BB: {exc}")
 
-    _exibir_consulta_erros_bb()
-
 
 def _exibir_feedback_lote(chave: str, label_botao: str = "Ver detalhes de erros e avisos"):
     """Mostra resumo e botão opcional para expandir erros/avisos."""
@@ -1823,27 +1821,63 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
 
     _exibir_feedback_lote("feedback_geracao", "Ver outros detalhes")
 
-    with st.expander("Consulta avulsa no BB (por nosso numero)"):
-        st.caption("Consulta GET do titulo no convenio selecionado acima.")
-        nn_avulso = st.text_input("Nosso numero", key="consulta_avulsa_nn")
-        if st.button("Consultar boleto", key="btn_consulta_avulsa_bb"):
-            try:
+    msg_avulsa = st.session_state.pop("feedback_consulta_avulsa", None)
+    if msg_avulsa:
+        if "falhou" in str(msg_avulsa).lower():
+            st.error(msg_avulsa)
+        else:
+            st.success(msg_avulsa)
+
+    # Resultado de consulta (erros do lote OU avulsa) — sempre visivel quando houver
+    _exibir_consulta_erros_bb()
+
+    st.divider()
+    st.subheader("Consulta avulsa no BB")
+    st.caption(
+        "Informe o nosso numero do convenio selecionado acima. "
+        "O resultado aparece na secao **Consulta no BB** (com Ver/Baixar JSON)."
+    )
+    nn_avulso = st.text_input("Nosso numero", key="consulta_avulsa_nn")
+    if st.button("🔍 Consultar boleto", type="primary", key="btn_consulta_avulsa_bb"):
+        try:
+            if not (nn_avulso or "").strip():
+                st.error("Informe o nosso numero.")
+            else:
                 dados_b = dados_conv_sel.to_dict()
                 cnpj_a = normalizar_cnpj_credencial(str(dados_b.get("cnpj") or ""))
-                creds_a = obter_bb_credenciais(supabase, user_id, cnpj_a) if cnpj_a else None
+                creds_a = (
+                    obter_bb_credenciais(supabase, user_id, cnpj_a) if cnpj_a else None
+                )
                 ativar_credenciais_bb(creds_a)
-                conv = "".join(filter(str.isdigit, str(dados_b.get("convenio", ""))))
-                from bb_api import montar_numero_titulo_cliente
+                if not bb_credenciais_configuradas():
+                    st.error(mensagem_credenciais_bb(cnpj_a or ""))
+                else:
+                    conv = "".join(
+                        filter(str.isdigit, str(dados_b.get("convenio", "")))
+                    )
+                    from bb_api import montar_numero_titulo_cliente
 
-                bid = montar_numero_titulo_cliente(conv, nn_avulso)
-                with st.spinner("Consultando..."):
-                    cons = consultar_boleto(bid, conv, nosso_numero=limpar_nosso_numero(nn_avulso))
-                st.session_state.ultima_consulta_erros_bb = [cons]
-                st.rerun()
-            except BbApiError as exc:
-                st.error(str(exc))
-            except Exception as exc:
-                st.error(str(exc))
+                    nn_limpo = limpar_nosso_numero(nn_avulso)
+                    bid = montar_numero_titulo_cliente(conv, nn_limpo)
+                    with st.spinner(f"Consultando {bid}..."):
+                        cons = consultar_boleto(
+                            bid, conv, nosso_numero=nn_limpo
+                        )
+                    st.session_state.ultima_consulta_erros_bb = [cons]
+                    st.session_state.mostrar_json_consulta_bb = True
+                    if cons.sucesso:
+                        st.session_state.feedback_consulta_avulsa = (
+                            f"Consulta OK: {nn_limpo}. Resultado e JSON abaixo."
+                        )
+                    else:
+                        st.session_state.feedback_consulta_avulsa = (
+                            f"Consulta falhou: {cons.mensagem}"
+                        )
+                    st.rerun()
+        except BbApiError as exc:
+            st.error(str(exc))
+        except Exception as exc:
+            st.error(str(exc))
 
     ultimo = st.session_state.get("ultimo_arquivo_remessa")
     if ultimo:
