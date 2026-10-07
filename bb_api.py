@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 import httpx
 import pandas as pd
@@ -105,6 +107,30 @@ AVISO_PRAZO_30_MIN = (
     "a partir de 30 minutos apos a geracao do boleto."
 )
 
+# Domínios codigoEstadoTituloCobranca (consulta individual / lista)
+ESTADOS_TITULO_COBRANCA = {
+    1: "NORMAL",
+    2: "MOVIMENTO CARTORIO",
+    3: "EM CARTORIO",
+    4: "TITULO COM OCORRENCIA DE CARTORIO",
+    5: "PROTESTADO ELETRONICO",
+    6: "LIQUIDADO",
+    7: "BAIXADO",
+    8: "TITULO COM PENDENCIA DE CARTORIO",
+    9: "TITULO PROTESTADO MANUAL",
+    10: "TITULO BAIXADO/PAGO EM CARTORIO",
+    11: "TITULO LIQUIDADO/PROTESTADO",
+    12: "TITULO LIQUID/PGCRTO",
+    13: "TITULO PROTESTADO AGUARDANDO BAIXA",
+    14: "TITULO EM LIQUIDACAO",
+    15: "TITULO AGENDADO BB",
+    16: "TITULO CREDITADO",
+    17: "PAGO EM CHEQUE - AGUARD.LIQUIDACAO",
+    18: "PAGO PARCIALMENTE",
+    19: "PAGO PARCIALMENTE CREDITADO",
+    21: "TITULO AGENDADO OUTROS BANCOS",
+}
+
 
 @dataclass
 class ResultadoLinhaApi:
@@ -144,6 +170,68 @@ class ResultadoEnvioApi:
         if not self.linhas:
             return pd.DataFrame()
         return pd.DataFrame([linha.para_linha_tabela() for linha in self.linhas])
+
+
+@dataclass
+class ResultadoConsultaBoleto:
+    nosso_numero: str
+    boleto_id: str
+    sucesso: bool
+    mensagem: str = ""
+    status_http: int | None = None
+    erro_instrucao: str = ""
+    codigo_bb_instrucao: str = ""
+    dados: dict = field(default_factory=dict)
+
+    def _rotulo_estado(self) -> str:
+        estado = (self.dados or {}).get("codigoEstadoTituloCobranca")
+        if estado in (None, ""):
+            return ""
+        try:
+            codigo = int(estado)
+        except (TypeError, ValueError):
+            return str(estado)
+        nome = ESTADOS_TITULO_COBRANCA.get(codigo)
+        return f"{codigo} - {nome}" if nome else str(codigo)
+
+    def para_resumo(self) -> dict:
+        d = self.dados or {}
+        pagador = d.get("pagador") if isinstance(d.get("pagador"), dict) else {}
+        return {
+            "Nosso Número": self.nosso_numero or "",
+            "ID API": self.boleto_id or "",
+            "Consulta": "OK" if self.sucesso else "Erro",
+            "Situação": self._rotulo_estado(),
+            "Vencimento": d.get("dataVencimento") or "",
+            "Valor original": d.get("valorOriginalTituloCobranca")
+            if d.get("valorOriginalTituloCobranca") is not None
+            else "",
+            "Valor atual": d.get("valorAtualTituloCobranca")
+            if d.get("valorAtualTituloCobranca") is not None
+            else "",
+            "Seu número": d.get("numeroTituloBeneficiario") or "",
+            "Pagador": pagador.get("nome") or "",
+            "CPF/CNPJ": pagador.get("numeroInscricao") or "",
+            "Linha digitável": d.get("codigoLinhaDigitavel") or "",
+            "Erro instrução": self.erro_instrucao or "",
+            "Código BB instrução": self.codigo_bb_instrucao or "",
+            "Erro consulta": "" if self.sucesso else (self.mensagem or ""),
+        }
+
+    def campos_achatados(self) -> dict[str, Any]:
+        base = {
+            "nosso_numero": self.nosso_numero,
+            "boleto_id": self.boleto_id,
+            "consulta_ok": self.sucesso,
+            "erro_instrucao": self.erro_instrucao,
+            "codigo_bb_instrucao": self.codigo_bb_instrucao,
+        }
+        if not self.sucesso:
+            base["erro_consulta"] = self.mensagem
+            base["http_consulta"] = self.status_http
+            return base
+        base.update(achatar_dict(self.dados or {}))
+        return base
 
 
 class BbApiError(Exception):
@@ -433,17 +521,41 @@ def _resultado_erro(
     )
 
 
+def achatar_dict(dados: Any, prefixo: str = "") -> dict[str, Any]:
+    """Achata dicts aninhados para exibicao tabular / CSV."""
+    saida: dict[str, Any] = {}
+    if not isinstance(dados, dict):
+        chave = prefixo or "valor"
+        if isinstance(dados, list):
+            saida[chave] = json.dumps(dados, ensure_ascii=False)
+        else:
+            saida[chave] = dados
+        return saida
+    for chave, valor in dados.items():
+        caminho = f"{prefixo}.{chave}" if prefixo else str(chave)
+        if isinstance(valor, dict):
+            saida.update(achatar_dict(valor, caminho))
+        elif isinstance(valor, list):
+            saida[caminho] = json.dumps(valor, ensure_ascii=False)
+        else:
+            saida[caminho] = valor
+    return saida
+
+
 def _request_bb(
     method: str,
     path: str,
     *,
     json_body: dict | None = None,
+    params_extra: dict | None = None,
 ) -> httpx.Response:
     cfg = _secrets_bb()
     urls = _ambiente_urls(cfg["ambiente"])
     token = obter_token()
     url = f"{urls['api_url']}{path}"
     params = {"gw-dev-app-key": cfg["app_key"]}
+    if params_extra:
+        params.update(params_extra)
 
     with httpx.Client(timeout=45.0) as client:
         resp = client.request(
@@ -464,6 +576,160 @@ def _request_bb(
                 json=json_body,
             )
     return resp
+
+
+def consultar_boleto(
+    boleto_id: str,
+    numero_convenio: str | int,
+    *,
+    nosso_numero: str = "",
+    erro_instrucao: str = "",
+    codigo_bb_instrucao: str = "",
+) -> ResultadoConsultaBoleto:
+    """GET /boletos/{id}?numeroConvenio=... — retorna todos os campos da API."""
+    if not bb_credenciais_configuradas():
+        raise BbApiError(mensagem_credenciais_bb())
+
+    convenio_raw = "".join(filter(str.isdigit, str(numero_convenio)))
+    if not convenio_raw:
+        raise BbApiError("Convenio bancario sem numero para consulta.")
+
+    boleto_id = "".join(filter(str.isdigit, str(boleto_id or "")))
+    if not boleto_id:
+        raise BbApiError("ID do boleto vazio para consulta.")
+
+    nn = nosso_numero or boleto_id
+    try:
+        resp = _request_bb(
+            "GET",
+            f"/boletos/{boleto_id}",
+            params_extra={"numeroConvenio": int(convenio_raw)},
+        )
+    except BbApiError:
+        raise
+    except Exception as exc:
+        return ResultadoConsultaBoleto(
+            nosso_numero=nn,
+            boleto_id=boleto_id,
+            sucesso=False,
+            mensagem=f"Erro de comunicacao: {exc}",
+            erro_instrucao=erro_instrucao,
+            codigo_bb_instrucao=codigo_bb_instrucao,
+        )
+
+    if 200 <= resp.status_code < 300:
+        try:
+            dados = resp.json()
+        except Exception:
+            dados = {"raw": resp.text[:2000]}
+        if not isinstance(dados, dict):
+            dados = {"raw": dados}
+        return ResultadoConsultaBoleto(
+            nosso_numero=nn,
+            boleto_id=boleto_id,
+            sucesso=True,
+            status_http=resp.status_code,
+            erro_instrucao=erro_instrucao,
+            codigo_bb_instrucao=codigo_bb_instrucao,
+            dados=dados,
+        )
+
+    codigo_bb, mensagem_bb, providencia = _extrair_erro_bb_detalhado(resp)
+    partes = [p for p in (mensagem_bb, f"Providencia: {providencia}" if providencia else "") if p]
+    mensagem = " ".join(partes) or f"HTTP {resp.status_code}"
+    if codigo_bb:
+        mensagem = f"[{codigo_bb}] {mensagem}"
+    return ResultadoConsultaBoleto(
+        nosso_numero=nn,
+        boleto_id=boleto_id,
+        sucesso=False,
+        mensagem=mensagem,
+        status_http=resp.status_code,
+        erro_instrucao=erro_instrucao,
+        codigo_bb_instrucao=codigo_bb_instrucao,
+    )
+
+
+def consultar_boletos_com_erro(
+    erros: list[dict | ResultadoLinhaApi],
+    numero_convenio: str | int,
+) -> list[ResultadoConsultaBoleto]:
+    """Consulta no BB cada boleto que falhou no envio da instrucao."""
+    if not bb_credenciais_configuradas():
+        raise BbApiError(mensagem_credenciais_bb())
+
+    convenio_raw = "".join(filter(str.isdigit, str(numero_convenio)))
+    if not convenio_raw:
+        raise BbApiError("Convenio bancario sem numero para consulta.")
+
+    obter_token()
+    resultados: list[ResultadoConsultaBoleto] = []
+    for item in erros:
+        if isinstance(item, ResultadoLinhaApi):
+            nn = item.nosso_numero
+            boleto_id = item.boleto_id
+            erro_instrucao = item.mensagem
+            codigo_bb = item.codigo_bb
+        else:
+            nn = str(item.get("nosso_numero") or "")
+            boleto_id = str(item.get("boleto_id") or "")
+            erro_instrucao = str(item.get("mensagem") or "")
+            codigo_bb = str(item.get("codigo_bb") or "")
+
+        if not boleto_id and nn:
+            try:
+                boleto_id = _montar_id_boleto(convenio_raw, nn)
+            except BbApiError as exc:
+                resultados.append(
+                    ResultadoConsultaBoleto(
+                        nosso_numero=nn or "?",
+                        boleto_id="",
+                        sucesso=False,
+                        mensagem=str(exc),
+                        erro_instrucao=erro_instrucao,
+                        codigo_bb_instrucao=codigo_bb,
+                    )
+                )
+                continue
+
+        if not boleto_id:
+            resultados.append(
+                ResultadoConsultaBoleto(
+                    nosso_numero=nn or "?",
+                    boleto_id="",
+                    sucesso=False,
+                    mensagem="Sem ID API para consultar.",
+                    erro_instrucao=erro_instrucao,
+                    codigo_bb_instrucao=codigo_bb,
+                )
+            )
+            continue
+
+        resultados.append(
+            consultar_boleto(
+                boleto_id,
+                convenio_raw,
+                nosso_numero=nn,
+                erro_instrucao=erro_instrucao,
+                codigo_bb_instrucao=codigo_bb,
+            )
+        )
+    return resultados
+
+
+def dataframe_resumo_consultas(consultas: list[ResultadoConsultaBoleto]) -> pd.DataFrame:
+    if not consultas:
+        return pd.DataFrame()
+    return pd.DataFrame([c.para_resumo() for c in consultas])
+
+
+def dataframe_campos_completos_consultas(
+    consultas: list[ResultadoConsultaBoleto],
+) -> pd.DataFrame:
+    """Uma linha por boleto com todos os campos achatados da resposta BB."""
+    if not consultas:
+        return pd.DataFrame()
+    return pd.DataFrame([c.campos_achatados() for c in consultas])
 
 
 def _executar_instrucao_linha(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import html as html_lib
+import json
 from datetime import datetime
 
 import pandas as pd
@@ -20,9 +21,13 @@ from bb_api import (
     HOMOLOG_CONVENIO,
     HOMOLOG_VARIACAO,
     INSTRUCOES_API_LABEL,
-    bb_credenciais_configuradas,
-    enviar_lotes_api,
+    ResultadoConsultaBoleto,
     ativar_credenciais_bb,
+    bb_credenciais_configuradas,
+    consultar_boletos_com_erro,
+    dataframe_campos_completos_consultas,
+    dataframe_resumo_consultas,
+    enviar_lotes_api,
     limpar_cache_token_bb,
     mensagem_credenciais_bb,
     sincronizar_credenciais_bb_sessao,
@@ -109,6 +114,104 @@ from validation import (
 )
 
 
+def _exibir_ficha_consulta_boleto(consulta: ResultadoConsultaBoleto) -> None:
+    """Ficha legivel + todos os campos + JSON bruto de um boleto consultado."""
+    if not consulta.sucesso:
+        st.error(consulta.mensagem or "Falha na consulta.")
+        if consulta.erro_instrucao:
+            st.caption(f"Erro da instrucao: {consulta.erro_instrucao}")
+        return
+
+    resumo = consulta.para_resumo()
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Situação", resumo.get("Situação") or "—")
+    col2.metric("Vencimento", str(resumo.get("Vencimento") or "—"))
+    col3.metric(
+        "Valor atual",
+        str(resumo.get("Valor atual") if resumo.get("Valor atual") != "" else "—"),
+    )
+    col4, col5, col6 = st.columns(3)
+    col4.write(f"**Pagador:** {resumo.get('Pagador') or '—'}")
+    col5.write(f"**CPF/CNPJ:** {resumo.get('CPF/CNPJ') or '—'}")
+    col6.write(f"**Seu número:** {resumo.get('Seu número') or '—'}")
+    if resumo.get("Linha digitável"):
+        st.code(str(resumo["Linha digitável"]), language=None)
+    if consulta.erro_instrucao:
+        st.warning(f"Erro da instrução enviada: {consulta.erro_instrucao}")
+
+    df_campos = pd.DataFrame(
+        [{"Campo": k, "Valor": v} for k, v in consulta.campos_achatados().items()]
+    )
+    with st.expander("Todos os campos retornados pelo BB", expanded=True):
+        _tabela_zebra(df_campos, altura_max=420)
+    with st.expander("JSON bruto (API)"):
+        st.code(
+            json.dumps(consulta.dados, ensure_ascii=False, indent=2, default=str),
+            language="json",
+        )
+
+
+def _exibir_consulta_erros_bb() -> None:
+    consultas: list[ResultadoConsultaBoleto] | None = st.session_state.get(
+        "ultima_consulta_erros_bb"
+    )
+    if not consultas:
+        return
+
+    st.subheader("Consulta no BB (boletos com erro)")
+    ok = sum(1 for c in consultas if c.sucesso)
+    st.caption(
+        f"{ok} consultado(s) com sucesso, {len(consultas) - ok} falha(s) na consulta. "
+        "Resumo operacional abaixo; detalhe completo por boleto."
+    )
+    df_resumo = dataframe_resumo_consultas(consultas)
+    _tabela_zebra(df_resumo, altura_max=400)
+
+    col_csv, col_json = st.columns(2)
+    with col_csv:
+        df_full = dataframe_campos_completos_consultas(consultas)
+        st.download_button(
+            "Baixar consulta completa (CSV)",
+            data=df_full.to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"consulta_bb_erros_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            key="btn_csv_consulta_erros_bb",
+        )
+    with col_json:
+        payload = [
+            {
+                "nosso_numero": c.nosso_numero,
+                "boleto_id": c.boleto_id,
+                "sucesso": c.sucesso,
+                "mensagem": c.mensagem,
+                "erro_instrucao": c.erro_instrucao,
+                "dados": c.dados,
+            }
+            for c in consultas
+        ]
+        st.download_button(
+            "Baixar JSON completo",
+            data=json.dumps(payload, ensure_ascii=False, indent=2, default=str).encode(
+                "utf-8"
+            ),
+            file_name=f"consulta_bb_erros_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            mime="application/json",
+            key="btn_json_consulta_erros_bb",
+        )
+
+    opcoes = {
+        f"{c.nosso_numero or '?'} ({'OK' if c.sucesso else 'falha consulta'})": i
+        for i, c in enumerate(consultas)
+    }
+    if opcoes:
+        escolha = st.selectbox(
+            "Detalhe do boleto",
+            options=list(opcoes.keys()),
+            key="sel_detalhe_consulta_erro_bb",
+        )
+        _exibir_ficha_consulta_boleto(consultas[opcoes[escolha]])
+
+
 def _exibir_resultado_api_tabela():
     """Tabela com nosso numero + status/erro de cada boleto do ultimo envio API."""
     df = st.session_state.get("ultimo_resultado_api_df")
@@ -129,6 +232,33 @@ def _exibir_resultado_api_tabela():
         mime="text/csv",
         key="btn_csv_resultado_api",
     )
+
+    erros = st.session_state.get("ultimo_resultado_api_erros") or []
+    convenio = st.session_state.get("ultimo_api_convenio") or ""
+    if erros and convenio:
+        st.caption(
+            f"{len(erros)} boleto(s) com erro — consulte o estado atual no BB "
+            "para ver situacao, vencimento, valor e demais campos."
+        )
+        if st.button(
+            "🔍 Consultar erros no BB",
+            use_container_width=True,
+            key="btn_consultar_erros_bb",
+        ):
+            try:
+                if not bb_credenciais_configuradas():
+                    st.error(mensagem_credenciais_bb())
+                else:
+                    with st.spinner(f"Consultando {len(erros)} boleto(s) no BB..."):
+                        consultas = consultar_boletos_com_erro(erros, convenio)
+                    st.session_state.ultima_consulta_erros_bb = consultas
+                    st.rerun()
+            except BbApiError as exc:
+                st.error(str(exc))
+            except Exception as exc:
+                st.error(f"Falha ao consultar boletos no BB: {exc}")
+
+    _exibir_consulta_erros_bb()
 
 
 def _exibir_feedback_lote(chave: str, label_botao: str = "Ver detalhes de erros e avisos"):
@@ -692,7 +822,7 @@ def render_sidebar(supabase: Client, user):
         st.sidebar.caption(f"API BB: {qtd_creds} CNPJ(s) com credencial")
     else:
         st.sidebar.caption("API BB: configure por CNPJ na aba API BB")
-    st.sidebar.caption("Versao interface: 2026.10.06d")
+    st.sidebar.caption("Versao interface: 2026.10.06e")
     return workspace_user_id
 
 
@@ -1432,6 +1562,22 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
 
                 df_resultado = resultado_api.dataframe_resultado()
                 st.session_state.ultimo_resultado_api_df = df_resultado
+                st.session_state.ultimo_resultado_api_erros = [
+                    {
+                        "nosso_numero": linha.nosso_numero,
+                        "boleto_id": linha.boleto_id,
+                        "mensagem": linha.mensagem,
+                        "status_http": linha.status_http,
+                        "codigo_bb": linha.codigo_bb,
+                        "instrucao": linha.instrucao,
+                    }
+                    for linha in resultado_api.linhas
+                    if not linha.sucesso
+                ]
+                st.session_state.ultimo_api_convenio = "".join(
+                    filter(str.isdigit, str(dados_bancarios.get("convenio", "")))
+                )
+                st.session_state.ultima_consulta_erros_bb = None
 
                 preview = []
                 for l in resultado_api.linhas[:PREVIEW_LINHAS]:
