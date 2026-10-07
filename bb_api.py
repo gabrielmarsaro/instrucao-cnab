@@ -112,6 +112,22 @@ class ResultadoLinhaApi:
     sucesso: bool
     mensagem: str
     status_http: int | None = None
+    boleto_id: str = ""
+    instrucao: str = ""
+    codigo_bb: str = ""
+    providencia: str = ""
+
+    def para_linha_tabela(self) -> dict:
+        return {
+            "Nosso Número": self.nosso_numero or "",
+            "ID API": self.boleto_id or "",
+            "Instrução": self.instrucao or "",
+            "Status": "OK" if self.sucesso else "Erro",
+            "HTTP": self.status_http if self.status_http is not None else "",
+            "Código BB": self.codigo_bb or "",
+            "Mensagem": self.mensagem or "",
+            "Providência": self.providencia or "",
+        }
 
 
 @dataclass
@@ -123,6 +139,11 @@ class ResultadoEnvioApi:
     avisos: list[str] = field(default_factory=list)
     titulos_atualizar: list[dict] = field(default_factory=list)
     valores_enviados: list[dict] = field(default_factory=list)
+
+    def dataframe_resultado(self) -> pd.DataFrame:
+        if not self.linhas:
+            return pd.DataFrame()
+        return pd.DataFrame([linha.para_linha_tabela() for linha in self.linhas])
 
 
 class BbApiError(Exception):
@@ -312,62 +333,104 @@ def _codigo_instrucao(lote: dict) -> str:
     return str(lote.get("instrucao", "")).split(" - ")[0].strip()
 
 
-def _formatar_item_erro_bb(item: dict) -> str:
-    """Monta texto legivel a partir dos formatos de erro do BB (v2/v4/gateway)."""
-    codigo = (
+def _parse_item_erro_bb(item: dict) -> tuple[str, str, str]:
+    """Retorna (codigo, mensagem, providencia)."""
+    codigo = str(
         item.get("codigo")
         or item.get("codigoMensagem")
         or item.get("code")
         or item.get("codigoErro")
-    )
-    mensagem = (
+        or ""
+    ).strip()
+    versao = item.get("versao") or item.get("versaoMensagem")
+    if codigo and versao not in (None, ""):
+        codigo = f"{codigo}.{versao}"
+    mensagem = str(
         item.get("mensagem")
         or item.get("textoMensagem")
         or item.get("message")
         or item.get("mensagemErro")
-    )
-    providencia = (
+        or ""
+    ).strip()
+    providencia = str(
         item.get("providencia")
         or item.get("acao")
         or item.get("action")
         or item.get("ocorrencia")
-    )
+        or ""
+    ).strip()
+    return codigo, mensagem, providencia
+
+
+def _formatar_item_erro_bb(item: dict) -> str:
+    codigo, mensagem, providencia = _parse_item_erro_bb(item)
     partes = []
     if codigo:
-        versao = item.get("versao") or item.get("versaoMensagem")
-        partes.append(f"[{codigo}" + (f".{versao}" if versao not in (None, "") else "") + "]")
+        partes.append(f"[{codigo}]")
     if mensagem:
-        partes.append(str(mensagem))
+        partes.append(mensagem)
     if providencia:
         partes.append(f"Providencia: {providencia}")
     return " ".join(partes) if partes else str(item)
 
 
-def _extrair_erro_bb(resp: httpx.Response) -> str:
+def _extrair_erro_bb_detalhado(resp: httpx.Response) -> tuple[str, str, str]:
+    """Retorna (codigo_bb, mensagem, providencia) do primeiro erro util."""
     try:
         data = resp.json()
     except Exception:
-        return resp.text[:800]
-    if isinstance(data, dict):
-        erros = data.get("erros") or data.get("errors")
-        if isinstance(erros, list) and erros:
-            partes = []
-            for e in erros:
-                if isinstance(e, dict):
-                    partes.append(_formatar_item_erro_bb(e))
-                else:
-                    partes.append(str(e))
-            return " | ".join(partes)[:800]
-        if isinstance(erros, str):
-            return erros[:800]
-        # Formato unico / OAuth
-        if any(k in data for k in ("codigo", "codigoMensagem", "code", "mensagem", "textoMensagem")):
-            return _formatar_item_erro_bb(data)[:800]
-        msg = data.get("message") or data.get("mensagem") or data.get("error_description")
-        if msg:
-            tipo = data.get("error") or data.get("statusCode") or ""
-            return (f"{tipo}: {msg}" if tipo else str(msg))[:800]
-    return str(data)[:800]
+        return "", (resp.text[:500] or f"HTTP {resp.status_code}"), ""
+    if not isinstance(data, dict):
+        return "", str(data)[:500], ""
+
+    erros = data.get("erros") or data.get("errors")
+    if isinstance(erros, list) and erros:
+        for e in erros:
+            if isinstance(e, dict):
+                return _parse_item_erro_bb(e)
+            return "", str(e)[:500], ""
+    if isinstance(erros, str):
+        return "", erros[:500], ""
+    if any(k in data for k in ("codigo", "codigoMensagem", "code", "mensagem", "textoMensagem")):
+        return _parse_item_erro_bb(data)
+    msg = data.get("message") or data.get("mensagem") or data.get("error_description")
+    if msg:
+        return str(data.get("error") or data.get("statusCode") or ""), str(msg)[:500], ""
+    return "", str(data)[:500], ""
+
+
+def _extrair_erro_bb(resp: httpx.Response) -> str:
+    codigo, mensagem, providencia = _extrair_erro_bb_detalhado(resp)
+    partes = []
+    if codigo:
+        partes.append(f"[{codigo}]")
+    if mensagem:
+        partes.append(mensagem)
+    if providencia:
+        partes.append(f"Providencia: {providencia}")
+    return (" ".join(partes) if partes else f"HTTP {resp.status_code}")[:800]
+
+
+def _resultado_erro(
+    nn: str,
+    mensagem: str,
+    *,
+    boleto_id: str = "",
+    instrucao: str = "",
+    status_http: int | None = None,
+    codigo_bb: str = "",
+    providencia: str = "",
+) -> ResultadoLinhaApi:
+    return ResultadoLinhaApi(
+        nosso_numero=nn,
+        sucesso=False,
+        mensagem=mensagem,
+        status_http=status_http,
+        boleto_id=boleto_id,
+        instrucao=instrucao,
+        codigo_bb=codigo_bb,
+        providencia=providencia,
+    )
 
 
 def _request_bb(
@@ -417,7 +480,7 @@ def _executar_instrucao_linha(
     nn = limpar_nosso_numero(row.get(colunas_map["nn"], ""))
     if not nn:
         return (
-            ResultadoLinhaApi("", False, "Linha sem Nosso Numero."),
+            _resultado_erro("", "Linha sem Nosso Numero.", instrucao=cod),
             None,
             None,
         )
@@ -425,7 +488,7 @@ def _executar_instrucao_linha(
     convenio_raw = "".join(filter(str.isdigit, str(dados_bancarios.get("convenio", ""))))
     if not convenio_raw:
         return (
-            ResultadoLinhaApi(nn, False, "Convenio bancario sem numero."),
+            _resultado_erro(nn, "Convenio bancario sem numero.", instrucao=cod),
             None,
             None,
         )
@@ -446,7 +509,12 @@ def _executar_instrucao_linha(
             if cod == "06":
                 if not nova_data:
                     return (
-                        ResultadoLinhaApi(nn, False, "Informe a nova data de vencimento."),
+                        _resultado_erro(
+                            nn,
+                            "Informe a nova data de vencimento.",
+                            boleto_id=boleto_id,
+                            instrucao=cod,
+                        ),
                         None,
                         None,
                     )
@@ -457,12 +525,18 @@ def _executar_instrucao_linha(
                 valor_f = normalizar_valor_monetario(valor)
                 if valor_f is None:
                     return (
-                        ResultadoLinhaApi(nn, False, "Valor nominal invalido na planilha."),
+                        _resultado_erro(
+                            nn,
+                            "Valor nominal invalido na planilha.",
+                            boleto_id=boleto_id,
+                            instrucao=cod,
+                        ),
                         None,
                         None,
                     )
+                # BB: apenas UMA alteracao por chamada
                 corpo["indicadorNovoValorNominal"] = "S"
-                corpo["alteracaoValor"] = {"novoValorNominal": valor_f}
+                corpo["alteracaoValor"] = {"novoValorNominal": float(valor_f)}
                 titulo_atualizar = {
                     "nosso_numero": nn,
                     "seu_numero": str(row.get(colunas_map.get("doc", ""), "")).replace(
@@ -471,21 +545,25 @@ def _executar_instrucao_linha(
                     "valor_nominal": valor_f,
                 }
             elif cod == "09":
-                # BB: so uma alteracao por chamada
                 corpo["indicadorProtestar"] = "S"
                 corpo["protesto"] = {"quantidadeDiasProtesto": 3}
             elif cod == "10":
-                # Uma alteracao por chamada — cancela instrucao ainda nao processada
                 corpo["indicadorCancelarProtesto"] = "S"
             else:
                 return (
-                    ResultadoLinhaApi(nn, False, f"Instrucao {cod} ainda nao mapeada."),
+                    _resultado_erro(
+                        nn,
+                        f"Instrucao {cod} ainda nao mapeada.",
+                        boleto_id=boleto_id,
+                        instrucao=cod,
+                    ),
                     None,
                     None,
                 )
 
-            # Correcao automatica de valor de face quando a referencia diverge
-            if valores_conhecidos and cod not in {"47", "02"}:
+            # Correcao automatica de valor: so se NAO houver outra alteracao ja marcada
+            # (BB rejeita mais de uma alteracao na mesma chamada)
+            if valores_conhecidos and cod not in {"47", "02", "06", "09", "10"}:
                 montante_planilha = normalizar_valor_monetario(
                     row.get(colunas_map.get("montante"))
                 )
@@ -496,23 +574,37 @@ def _executar_instrucao_linha(
                     and valores_monetarios_diferem(montante_planilha, registrado)
                 ):
                     corpo["indicadorNovoValorNominal"] = "S"
-                    corpo["alteracaoValor"] = {"novoValorNominal": registrado}
+                    corpo["alteracaoValor"] = {"novoValorNominal": float(registrado)}
 
             resp = _request_bb("PATCH", f"/boletos/{boleto_id}", json_body=corpo)
         else:
             return (
-                ResultadoLinhaApi(
+                _resultado_erro(
                     nn,
-                    False,
                     f"Instrucao {cod} ainda nao suportada pela API neste app.",
+                    boleto_id=boleto_id,
+                    instrucao=cod,
                 ),
                 None,
                 None,
             )
     except BbApiError as exc:
-        return ResultadoLinhaApi(nn, False, str(exc)), None, None
+        return (
+            _resultado_erro(nn, str(exc), boleto_id=boleto_id, instrucao=cod),
+            None,
+            None,
+        )
     except Exception as exc:
-        return ResultadoLinhaApi(nn, False, f"Erro de comunicacao: {exc}"), None, None
+        return (
+            _resultado_erro(
+                nn,
+                f"Erro de comunicacao: {exc}",
+                boleto_id=boleto_id,
+                instrucao=cod,
+            ),
+            None,
+            None,
+        )
 
     if 200 <= resp.status_code < 300:
         valor_enviado = {
@@ -525,17 +617,40 @@ def _executar_instrucao_linha(
             "cod_instrucao": cod,
         }
         return (
-            ResultadoLinhaApi(nn, True, "Enviado com sucesso.", resp.status_code),
+            ResultadoLinhaApi(
+                nosso_numero=nn,
+                sucesso=True,
+                mensagem="Enviado com sucesso.",
+                status_http=resp.status_code,
+                boleto_id=boleto_id,
+                instrucao=cod,
+            ),
             titulo_atualizar,
             valor_enviado,
         )
 
+    codigo_bb, mensagem_bb, providencia = _extrair_erro_bb_detalhado(resp)
+    # 503/4125718 costuma ser falha tecnica do BB, nao validacao de negocio
+    if resp.status_code >= 500 or codigo_bb.startswith("4125718"):
+        if providencia:
+            mensagem_final = mensagem_bb
+        else:
+            mensagem_final = (
+                f"{mensagem_bb} (erro tecnico do BB — geralmente nao detalha "
+                "campo invalido; tente novamente em alguns minutos)"
+            )
+    else:
+        mensagem_final = mensagem_bb or _extrair_erro_bb(resp)
+
     return (
-        ResultadoLinhaApi(
+        _resultado_erro(
             nn,
-            False,
-            f"HTTP {resp.status_code}: {_extrair_erro_bb(resp)}",
-            resp.status_code,
+            mensagem_final,
+            boleto_id=boleto_id,
+            instrucao=cod,
+            status_http=resp.status_code,
+            codigo_bb=codigo_bb,
+            providencia=providencia,
         ),
         None,
         None,
@@ -589,10 +704,10 @@ def enviar_lotes_api(
                 resultado.total += 1
                 resultado.falhas += 1
                 resultado.linhas.append(
-                    ResultadoLinhaApi(
+                    _resultado_erro(
                         nn or "?",
-                        False,
                         f"Instrucao {cod} nao suportada via API. Use o botao CNAB.",
+                        instrucao=cod,
                     )
                 )
             continue

@@ -109,6 +109,28 @@ from validation import (
 )
 
 
+def _exibir_resultado_api_tabela():
+    """Tabela com nosso numero + status/erro de cada boleto do ultimo envio API."""
+    df = st.session_state.get("ultimo_resultado_api_df")
+    if df is None or (isinstance(df, pd.DataFrame) and df.empty):
+        return
+    st.subheader("Resultado por boleto (API BB)")
+    st.caption(
+        "Cada linha e um nosso numero da remessa. "
+        "Erros HTTP 5xx / codigo 4125718 costumam ser falha tecnica do BB "
+        "(nao detalham campo invalido)."
+    )
+    _tabela_zebra(df, altura_max=500)
+    csv_bytes = df.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        "Baixar resultado (CSV)",
+        data=csv_bytes,
+        file_name=f"resultado_api_bb_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv",
+        key="btn_csv_resultado_api",
+    )
+
+
 def _exibir_feedback_lote(chave: str, label_botao: str = "Ver detalhes de erros e avisos"):
     """Mostra resumo e botão opcional para expandir erros/avisos."""
     feedback = st.session_state.get(chave)
@@ -124,12 +146,9 @@ def _exibir_feedback_lote(chave: str, label_botao: str = "Ver detalhes de erros 
     else:
         st.error(feedback["mensagem"])
 
-    # Motivo da rejeicao da API BB: mostra direto (sem depender do botao)
-    if erros and not feedback.get("sucesso"):
-        for item in erros[:10]:
-            st.error(str(item))
-        if len(erros) > 10:
-            st.caption(f"... e mais {len(erros) - 10} erro(s).")
+    # Resultado API em tabela (melhor para muitos boletos)
+    if chave == "feedback_geracao":
+        _exibir_resultado_api_tabela()
 
     if correcoes:
         lista = "\n".join(f"- {item}" for item in correcoes)
@@ -139,6 +158,14 @@ def _exibir_feedback_lote(chave: str, label_botao: str = "Ver detalhes de erros 
         )
 
     if not erros and not avisos:
+        return
+
+    # Se ja mostrou tabela API, nao lista erros em texto (evita poluir)
+    if chave == "feedback_geracao" and st.session_state.get("ultimo_resultado_api_df") is not None:
+        if avisos:
+            with st.expander("Avisos"):
+                for item in avisos:
+                    st.warning(f"• {item}")
         return
 
     toggle_key = f"{chave}_aberto"
@@ -665,7 +692,7 @@ def render_sidebar(supabase: Client, user):
         st.sidebar.caption(f"API BB: {qtd_creds} CNPJ(s) com credencial")
     else:
         st.sidebar.caption("API BB: configure por CNPJ na aba API BB")
-    st.sidebar.caption("Versao interface: 2026.10.06c")
+    st.sidebar.caption("Versao interface: 2026.10.06d")
     return workspace_user_id
 
 
@@ -1403,10 +1430,15 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                             "Envio OK, mas falhou ao gravar valores nominais no Supabase."
                         )
 
-                preview = [
-                    f"{'OK' if l.sucesso else 'ERRO'} | {l.nosso_numero} | {l.mensagem}"
-                    for l in resultado_api.linhas[:PREVIEW_LINHAS]
-                ]
+                df_resultado = resultado_api.dataframe_resultado()
+                st.session_state.ultimo_resultado_api_df = df_resultado
+
+                preview = []
+                for l in resultado_api.linhas[:PREVIEW_LINHAS]:
+                    preview.append(
+                        f"{'OK' if l.sucesso else 'ERRO'} | {l.nosso_numero} | "
+                        f"HTTP {l.status_http or '-'} | {l.codigo_bb or '-'} | {l.mensagem}"
+                    )
                 nome_registro = (
                     f"api_bb_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                     f"_{resultado_api.sucessos}ok_{resultado_api.falhas}erro"
@@ -1440,14 +1472,14 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                 except Exception:
                     pass
 
-                motivo = erros_api[0] if erros_api else ""
                 if resultado_api.sucessos and resultado_api.falhas == 0:
                     st.session_state.lotes = []
                     st.session_state.feedback_lote = None
                     st.session_state.feedback_geracao = {
                         "sucesso": True,
                         "mensagem": (
-                            f"API BB: **{resultado_api.sucessos}** boleto(s) enviado(s) com sucesso."
+                            f"API BB: **{resultado_api.sucessos}** boleto(s) enviado(s) com sucesso. "
+                            "Veja a tabela abaixo."
                         ),
                         "erros": [],
                         "avisos": avisos_api,
@@ -1457,8 +1489,7 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                         "sucesso": True,
                         "mensagem": (
                             f"API BB: **{resultado_api.sucessos}** ok, "
-                            f"**{resultado_api.falhas}** com erro."
-                            + (f" Motivo: {motivo}" if motivo else "")
+                            f"**{resultado_api.falhas}** com erro. Veja a tabela abaixo."
                         ),
                         "erros": erros_api,
                         "avisos": avisos_api,
@@ -1468,13 +1499,12 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                         "sucesso": False,
                         "mensagem": (
                             f"API BB: nenhum boleto enviado com sucesso "
-                            f"({resultado_api.falhas} erro(s))."
-                            + (f" Motivo: {motivo}" if motivo else "")
+                            f"({resultado_api.falhas} erro(s)). Veja a tabela abaixo."
                         ),
                         "erros": erros_api,
                         "avisos": avisos_api,
                     }
-                st.session_state.feedback_geracao_aberto = True
+                st.session_state.feedback_geracao_aberto = False
                 st.rerun()
             except BbApiError as exc:
                 st.error(str(exc))
