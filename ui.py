@@ -124,6 +124,13 @@ def _exibir_feedback_lote(chave: str, label_botao: str = "Ver detalhes de erros 
     else:
         st.error(feedback["mensagem"])
 
+    # Motivo da rejeicao da API BB: mostra direto (sem depender do botao)
+    if erros and not feedback.get("sucesso"):
+        for item in erros[:10]:
+            st.error(str(item))
+        if len(erros) > 10:
+            st.caption(f"... e mais {len(erros) - 10} erro(s).")
+
     if correcoes:
         lista = "\n".join(f"- {item}" for item in correcoes)
         st.warning(
@@ -658,7 +665,7 @@ def render_sidebar(supabase: Client, user):
         st.sidebar.caption(f"API BB: {qtd_creds} CNPJ(s) com credencial")
     else:
         st.sidebar.caption("API BB: configure por CNPJ na aba API BB")
-    st.sidebar.caption("Versao interface: 2026.10.06b")
+    st.sidebar.caption("Versao interface: 2026.10.06c")
     return workspace_user_id
 
 
@@ -1433,6 +1440,7 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                 except Exception:
                     pass
 
+                motivo = erros_api[0] if erros_api else ""
                 if resultado_api.sucessos and resultado_api.falhas == 0:
                     st.session_state.lotes = []
                     st.session_state.feedback_lote = None
@@ -1450,6 +1458,7 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                         "mensagem": (
                             f"API BB: **{resultado_api.sucessos}** ok, "
                             f"**{resultado_api.falhas}** com erro."
+                            + (f" Motivo: {motivo}" if motivo else "")
                         ),
                         "erros": erros_api,
                         "avisos": avisos_api,
@@ -1460,11 +1469,12 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                         "mensagem": (
                             f"API BB: nenhum boleto enviado com sucesso "
                             f"({resultado_api.falhas} erro(s))."
+                            + (f" Motivo: {motivo}" if motivo else "")
                         ),
                         "erros": erros_api,
                         "avisos": avisos_api,
                     }
-                st.session_state.feedback_geracao_aberto = False
+                st.session_state.feedback_geracao_aberto = True
                 st.rerun()
             except BbApiError as exc:
                 st.error(str(exc))

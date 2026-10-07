@@ -312,29 +312,62 @@ def _codigo_instrucao(lote: dict) -> str:
     return str(lote.get("instrucao", "")).split(" - ")[0].strip()
 
 
+def _formatar_item_erro_bb(item: dict) -> str:
+    """Monta texto legivel a partir dos formatos de erro do BB (v2/v4/gateway)."""
+    codigo = (
+        item.get("codigo")
+        or item.get("codigoMensagem")
+        or item.get("code")
+        or item.get("codigoErro")
+    )
+    mensagem = (
+        item.get("mensagem")
+        or item.get("textoMensagem")
+        or item.get("message")
+        or item.get("mensagemErro")
+    )
+    providencia = (
+        item.get("providencia")
+        or item.get("acao")
+        or item.get("action")
+        or item.get("ocorrencia")
+    )
+    partes = []
+    if codigo:
+        versao = item.get("versao") or item.get("versaoMensagem")
+        partes.append(f"[{codigo}" + (f".{versao}" if versao not in (None, "") else "") + "]")
+    if mensagem:
+        partes.append(str(mensagem))
+    if providencia:
+        partes.append(f"Providencia: {providencia}")
+    return " ".join(partes) if partes else str(item)
+
+
 def _extrair_erro_bb(resp: httpx.Response) -> str:
     try:
         data = resp.json()
     except Exception:
-        return resp.text[:400]
+        return resp.text[:800]
     if isinstance(data, dict):
-        erros = data.get("erros") or data.get("errors") or data.get("error")
+        erros = data.get("erros") or data.get("errors")
         if isinstance(erros, list) and erros:
             partes = []
             for e in erros:
                 if isinstance(e, dict):
-                    partes.append(
-                        str(e.get("mensagem") or e.get("message") or e.get("codigo") or e)
-                    )
+                    partes.append(_formatar_item_erro_bb(e))
                 else:
                     partes.append(str(e))
-            return " | ".join(partes)[:400]
+            return " | ".join(partes)[:800]
         if isinstance(erros, str):
-            return erros[:400]
+            return erros[:800]
+        # Formato unico / OAuth
+        if any(k in data for k in ("codigo", "codigoMensagem", "code", "mensagem", "textoMensagem")):
+            return _formatar_item_erro_bb(data)[:800]
         msg = data.get("message") or data.get("mensagem") or data.get("error_description")
         if msg:
-            return str(msg)[:400]
-    return str(data)[:400]
+            tipo = data.get("error") or data.get("statusCode") or ""
+            return (f"{tipo}: {msg}" if tipo else str(msg))[:800]
+    return str(data)[:800]
 
 
 def _request_bb(
