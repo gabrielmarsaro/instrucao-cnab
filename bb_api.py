@@ -181,6 +181,8 @@ class ResultadoConsultaBoleto:
     status_http: int | None = None
     erro_instrucao: str = ""
     codigo_bb_instrucao: str = ""
+    providencia_instrucao: str = ""
+    status_http_instrucao: int | None = None
     dados: dict = field(default_factory=dict)
 
     def _rotulo_estado(self) -> str:
@@ -194,28 +196,82 @@ class ResultadoConsultaBoleto:
         nome = ESTADOS_TITULO_COBRANCA.get(codigo)
         return f"{codigo} - {nome}" if nome else str(codigo)
 
+    def _texto_erro(self) -> str:
+        if self.erro_instrucao:
+            return self.erro_instrucao
+        if not self.sucesso and self.mensagem:
+            return self.mensagem
+        return ""
+
+    def _proximo_passo(self) -> str:
+        if self.providencia_instrucao:
+            return self.providencia_instrucao
+
+        codigo = (self.codigo_bb_instrucao or "").strip()
+        erro = (self.erro_instrucao or self.mensagem or "").lower()
+        http_inst = self.status_http_instrucao
+
+        if (
+            codigo.startswith("4125718")
+            or (http_inst is not None and http_inst >= 500)
+            or "problema tecnico" in erro
+            or "problema técnico" in erro
+        ):
+            return (
+                "Tente novamente em alguns minutos. "
+                "Se persistir, registre ocorrencia no Portal Developers (Suporte)."
+            )
+
+        if not self.sucesso:
+            return (
+                "Confirme convenio/nosso numero e consulte de novo. "
+                "Se o boleto nao existir, use o CNAB ou registre antes de alterar."
+            )
+
+        estado_raw = (self.dados or {}).get("codigoEstadoTituloCobranca")
+        try:
+            estado = int(estado_raw)
+        except (TypeError, ValueError):
+            estado = None
+
+        if estado in {6, 7, 10, 11, 12, 16}:
+            return (
+                "Titulo liquidado/baixado/creditado — "
+                "nao e possivel alterar; confira se a instrucao ainda se aplica."
+            )
+        if estado in {2, 3, 4, 5, 8, 9, 13}:
+            return (
+                "Titulo em cartorio/protesto — "
+                "revise a situacao antes de reenviar alteracao ou baixa."
+            )
+        if "30 minut" in erro:
+            return "Aguarde 30 minutos apos a geracao do boleto (homologacao) e reenvie."
+
+        return (
+            "Compare valor/vencimento da planilha com o estado atual e reenvie a instrucao."
+        )
+
     def para_resumo(self) -> dict:
         d = self.dados or {}
         pagador = d.get("pagador") if isinstance(d.get("pagador"), dict) else {}
         return {
             "Nosso Número": self.nosso_numero or "",
-            "ID API": self.boleto_id or "",
-            "Consulta": "OK" if self.sucesso else "Erro",
-            "Situação": self._rotulo_estado(),
-            "Vencimento": d.get("dataVencimento") or "",
-            "Valor original": d.get("valorOriginalTituloCobranca")
-            if d.get("valorOriginalTituloCobranca") is not None
-            else "",
-            "Valor atual": d.get("valorAtualTituloCobranca")
-            if d.get("valorAtualTituloCobranca") is not None
-            else "",
-            "Seu número": d.get("numeroTituloBeneficiario") or "",
-            "Pagador": pagador.get("nome") or "",
-            "CPF/CNPJ": pagador.get("numeroInscricao") or "",
-            "Linha digitável": d.get("codigoLinhaDigitavel") or "",
-            "Erro instrução": self.erro_instrucao or "",
-            "Código BB instrução": self.codigo_bb_instrucao or "",
-            "Erro consulta": "" if self.sucesso else (self.mensagem or ""),
+            "Situação": self._rotulo_estado() if self.sucesso else "—",
+            "Vencimento": (d.get("dataVencimento") or "") if self.sucesso else "",
+            "Valor original": (
+                d.get("valorOriginalTituloCobranca")
+                if self.sucesso and d.get("valorOriginalTituloCobranca") is not None
+                else ""
+            ),
+            "Valor atual": (
+                d.get("valorAtualTituloCobranca")
+                if self.sucesso and d.get("valorAtualTituloCobranca") is not None
+                else ""
+            ),
+            "Pagador": (pagador.get("nome") or "") if self.sucesso else "",
+            "CPF": (pagador.get("numeroInscricao") or "") if self.sucesso else "",
+            "Erro": self._texto_erro(),
+            "Próximo passo": self._proximo_passo(),
         }
 
     def campos_achatados(self) -> dict[str, Any]:
@@ -225,6 +281,8 @@ class ResultadoConsultaBoleto:
             "consulta_ok": self.sucesso,
             "erro_instrucao": self.erro_instrucao,
             "codigo_bb_instrucao": self.codigo_bb_instrucao,
+            "providencia_instrucao": self.providencia_instrucao,
+            "proximo_passo": self._proximo_passo(),
         }
         if not self.sucesso:
             base["erro_consulta"] = self.mensagem
@@ -585,6 +643,8 @@ def consultar_boleto(
     nosso_numero: str = "",
     erro_instrucao: str = "",
     codigo_bb_instrucao: str = "",
+    providencia_instrucao: str = "",
+    status_http_instrucao: int | None = None,
 ) -> ResultadoConsultaBoleto:
     """GET /boletos/{id}?numeroConvenio=... — retorna todos os campos da API."""
     if not bb_credenciais_configuradas():
@@ -599,6 +659,12 @@ def consultar_boleto(
         raise BbApiError("ID do boleto vazio para consulta.")
 
     nn = nosso_numero or boleto_id
+    meta = {
+        "erro_instrucao": erro_instrucao,
+        "codigo_bb_instrucao": codigo_bb_instrucao,
+        "providencia_instrucao": providencia_instrucao,
+        "status_http_instrucao": status_http_instrucao,
+    }
     try:
         resp = _request_bb(
             "GET",
@@ -613,8 +679,7 @@ def consultar_boleto(
             boleto_id=boleto_id,
             sucesso=False,
             mensagem=f"Erro de comunicacao: {exc}",
-            erro_instrucao=erro_instrucao,
-            codigo_bb_instrucao=codigo_bb_instrucao,
+            **meta,
         )
 
     if 200 <= resp.status_code < 300:
@@ -629,9 +694,8 @@ def consultar_boleto(
             boleto_id=boleto_id,
             sucesso=True,
             status_http=resp.status_code,
-            erro_instrucao=erro_instrucao,
-            codigo_bb_instrucao=codigo_bb_instrucao,
             dados=dados,
+            **meta,
         )
 
     codigo_bb, mensagem_bb, providencia = _extrair_erro_bb_detalhado(resp)
@@ -645,8 +709,7 @@ def consultar_boleto(
         sucesso=False,
         mensagem=mensagem,
         status_http=resp.status_code,
-        erro_instrucao=erro_instrucao,
-        codigo_bb_instrucao=codigo_bb_instrucao,
+        **meta,
     )
 
 
@@ -670,11 +733,26 @@ def consultar_boletos_com_erro(
             boleto_id = item.boleto_id
             erro_instrucao = item.mensagem
             codigo_bb = item.codigo_bb
+            providencia = item.providencia
+            http_inst = item.status_http
         else:
             nn = str(item.get("nosso_numero") or "")
             boleto_id = str(item.get("boleto_id") or "")
             erro_instrucao = str(item.get("mensagem") or "")
             codigo_bb = str(item.get("codigo_bb") or "")
+            providencia = str(item.get("providencia") or "")
+            http_raw = item.get("status_http")
+            try:
+                http_inst = int(http_raw) if http_raw not in (None, "") else None
+            except (TypeError, ValueError):
+                http_inst = None
+
+        meta = {
+            "erro_instrucao": erro_instrucao,
+            "codigo_bb_instrucao": codigo_bb,
+            "providencia_instrucao": providencia,
+            "status_http_instrucao": http_inst,
+        }
 
         if not boleto_id and nn:
             try:
@@ -686,8 +764,7 @@ def consultar_boletos_com_erro(
                         boleto_id="",
                         sucesso=False,
                         mensagem=str(exc),
-                        erro_instrucao=erro_instrucao,
-                        codigo_bb_instrucao=codigo_bb,
+                        **meta,
                     )
                 )
                 continue
@@ -699,8 +776,7 @@ def consultar_boletos_com_erro(
                     boleto_id="",
                     sucesso=False,
                     mensagem="Sem ID API para consultar.",
-                    erro_instrucao=erro_instrucao,
-                    codigo_bb_instrucao=codigo_bb,
+                    **meta,
                 )
             )
             continue
@@ -710,8 +786,7 @@ def consultar_boletos_com_erro(
                 boleto_id,
                 convenio_raw,
                 nosso_numero=nn,
-                erro_instrucao=erro_instrucao,
-                codigo_bb_instrucao=codigo_bb,
+                **meta,
             )
         )
     return resultados

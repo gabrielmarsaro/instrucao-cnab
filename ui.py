@@ -130,14 +130,13 @@ def _exibir_ficha_consulta_boleto(consulta: ResultadoConsultaBoleto) -> None:
         "Valor atual",
         str(resumo.get("Valor atual") if resumo.get("Valor atual") != "" else "—"),
     )
-    col4, col5, col6 = st.columns(3)
+    col4, col5 = st.columns(2)
     col4.write(f"**Pagador:** {resumo.get('Pagador') or '—'}")
-    col5.write(f"**CPF/CNPJ:** {resumo.get('CPF/CNPJ') or '—'}")
-    col6.write(f"**Seu número:** {resumo.get('Seu número') or '—'}")
-    if resumo.get("Linha digitável"):
-        st.code(str(resumo["Linha digitável"]), language=None)
-    if consulta.erro_instrucao:
-        st.warning(f"Erro da instrução enviada: {consulta.erro_instrucao}")
+    col5.write(f"**CPF:** {resumo.get('CPF') or '—'}")
+    if resumo.get("Erro"):
+        st.warning(f"**Erro:** {resumo['Erro']}")
+    if resumo.get("Próximo passo"):
+        st.info(f"**Próximo passo:** {resumo['Próximo passo']}")
 
     df_campos = pd.DataFrame(
         [{"Campo": k, "Valor": v} for k, v in consulta.campos_achatados().items()]
@@ -161,17 +160,24 @@ def _exibir_consulta_erros_bb() -> None:
     st.subheader("Consulta no BB (boletos com erro)")
     ok = sum(1 for c in consultas if c.sucesso)
     st.caption(
-        f"{ok} consultado(s) com sucesso, {len(consultas) - ok} falha(s) na consulta. "
-        "Resumo operacional abaixo; detalhe completo por boleto."
+        f"{ok} consultado(s) com sucesso, {len(consultas) - ok} falha(s) na consulta."
     )
     df_resumo = dataframe_resumo_consultas(consultas)
     _tabela_zebra(df_resumo, altura_max=400)
 
-    col_csv, col_json = st.columns(2)
+    col_csv, col_full, col_json = st.columns(3)
     with col_csv:
+        st.download_button(
+            "Baixar resumo (CSV)",
+            data=df_resumo.to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"consulta_bb_resumo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            key="btn_csv_consulta_resumo_bb",
+        )
+    with col_full:
         df_full = dataframe_campos_completos_consultas(consultas)
         st.download_button(
-            "Baixar consulta completa (CSV)",
+            "Baixar completo (CSV)",
             data=df_full.to_csv(index=False).encode("utf-8-sig"),
             file_name=f"consulta_bb_erros_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv",
@@ -822,7 +828,7 @@ def render_sidebar(supabase: Client, user):
         st.sidebar.caption(f"API BB: {qtd_creds} CNPJ(s) com credencial")
     else:
         st.sidebar.caption("API BB: configure por CNPJ na aba API BB")
-    st.sidebar.caption("Versao interface: 2026.10.06e")
+    st.sidebar.caption("Versao interface: 2026.10.06f")
     return workspace_user_id
 
 
@@ -1569,6 +1575,7 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                         "mensagem": linha.mensagem,
                         "status_http": linha.status_http,
                         "codigo_bb": linha.codigo_bb,
+                        "providencia": linha.providencia,
                         "instrucao": linha.instrucao,
                     }
                     for linha in resultado_api.linhas
