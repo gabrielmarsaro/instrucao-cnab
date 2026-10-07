@@ -251,25 +251,59 @@ class ResultadoConsultaBoleto:
             "Compare valor/vencimento da planilha com o estado atual e reenvie a instrucao."
         )
 
-    def para_resumo(self) -> dict:
+    def _primeiro_valor(self, *chaves: str) -> Any:
+        """Primeiro valor nao vazio entre chaves (GET BB usa nomes longos)."""
         d = self.dados or {}
+        for chave in chaves:
+            if chave not in d:
+                continue
+            valor = d.get(chave)
+            if valor in (None, ""):
+                continue
+            return valor
+        # Formato aninhado (alguns endpoints)
         pagador = d.get("pagador") if isinstance(d.get("pagador"), dict) else {}
+        for chave in chaves:
+            if chave in ("nome", "nomeSacadoCobranca") and pagador.get("nome"):
+                return pagador.get("nome")
+            if chave in ("numeroInscricao", "numeroInscricaoSacadoCobranca") and pagador.get(
+                "numeroInscricao"
+            ):
+                return pagador.get("numeroInscricao")
+            if chave in ("dataVencimento", "dataVencimentoTituloCobranca") and d.get(
+                "dataVencimento"
+            ):
+                return d.get("dataVencimento")
+        return ""
+
+    def para_resumo(self) -> dict:
+        if not self.sucesso:
+            return {
+                "Nosso Número": self.nosso_numero or "",
+                "Situação": "—",
+                "Vencimento": "",
+                "Valor original": "",
+                "Valor atual": "",
+                "Pagador": "",
+                "CPF": "",
+                "Erro": self._texto_erro(),
+                "Próximo passo": self._proximo_passo(),
+            }
+
+        valor_orig = self._primeiro_valor("valorOriginalTituloCobranca", "valorOriginal")
+        valor_atual = self._primeiro_valor("valorAtualTituloCobranca", "valorAtual")
         return {
             "Nosso Número": self.nosso_numero or "",
-            "Situação": self._rotulo_estado() if self.sucesso else "—",
-            "Vencimento": (d.get("dataVencimento") or "") if self.sucesso else "",
-            "Valor original": (
-                d.get("valorOriginalTituloCobranca")
-                if self.sucesso and d.get("valorOriginalTituloCobranca") is not None
-                else ""
+            "Situação": self._rotulo_estado(),
+            "Vencimento": self._primeiro_valor(
+                "dataVencimentoTituloCobranca", "dataVencimento"
             ),
-            "Valor atual": (
-                d.get("valorAtualTituloCobranca")
-                if self.sucesso and d.get("valorAtualTituloCobranca") is not None
-                else ""
+            "Valor original": valor_orig if valor_orig != "" else "",
+            "Valor atual": valor_atual if valor_atual != "" else "",
+            "Pagador": self._primeiro_valor("nomeSacadoCobranca", "nome"),
+            "CPF": self._primeiro_valor(
+                "numeroInscricaoSacadoCobranca", "numeroInscricao"
             ),
-            "Pagador": (pagador.get("nome") or "") if self.sucesso else "",
-            "CPF": (pagador.get("numeroInscricao") or "") if self.sucesso else "",
             "Erro": self._texto_erro(),
             "Próximo passo": self._proximo_passo(),
         }
