@@ -1,7 +1,7 @@
 """Constantes e configurações do aplicativo."""
 
 # Versao exibida na sidebar / suporte (bump a cada release publicada)
-APP_VERSION = "2026.10.07a"
+APP_VERSION = "2026.10.07b"
 
 # Rótulos de interface
 # Navegacao principal (radio) — so a view ativa e renderizada
