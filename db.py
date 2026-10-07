@@ -144,6 +144,110 @@ def remover_compartilhamento(supabase: Client, convite_id: str) -> None:
     supabase.table("compartilhamentos").delete().eq("id", convite_id).execute()
 
 
+def normalizar_cnpj_credencial(cnpj: str) -> str:
+    """CNPJ só com dígitos (ou alfanumérico de homologação, maiúsculo sem máscara)."""
+    texto = str(cnpj or "").strip().upper()
+    if not texto or texto.lower() == "nan":
+        return ""
+    # Homologação alfanumérica (ex.: MHWXJ9YFDPJ217)
+    alfanum = "".join(c for c in texto if c.isalnum())
+    so_digitos = "".join(c for c in texto if c.isdigit())
+    if so_digitos and len(so_digitos) >= 11 and len(so_digitos) == len(alfanum):
+        return so_digitos
+    return alfanum
+
+
+def obter_bb_credenciais(supabase: Client, user_id: str, cnpj: str) -> dict | None:
+    """Credenciais da API BB do CNPJ (compartilhadas por todos os convênios desse CNPJ)."""
+    cnpj_norm = normalizar_cnpj_credencial(cnpj)
+    if not cnpj_norm:
+        return None
+    try:
+        resposta = (
+            supabase.table("bb_credenciais")
+            .select("cnpj, razao_social, client_id, client_secret, app_key, ambiente, updated_at")
+            .eq("user_id", user_id)
+            .eq("cnpj", cnpj_norm)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        if _erro_tabela_ausente(exc, "bb_credenciais"):
+            return None
+        raise
+    if not resposta.data:
+        return None
+    row = resposta.data[0]
+    return {
+        "cnpj": str(row.get("cnpj") or cnpj_norm),
+        "razao_social": str(row.get("razao_social") or "").strip(),
+        "client_id": str(row.get("client_id") or "").strip(),
+        "client_secret": str(row.get("client_secret") or "").strip(),
+        "app_key": str(row.get("app_key") or "").strip(),
+        "ambiente": str(row.get("ambiente") or "homologacao").strip().lower(),
+        "scopes": "",
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def listar_bb_credenciais(supabase: Client, user_id: str) -> pd.DataFrame:
+    try:
+        resposta = (
+            supabase.table("bb_credenciais")
+            .select("cnpj, razao_social, ambiente, updated_at, client_id, app_key")
+            .eq("user_id", user_id)
+            .order("cnpj")
+            .execute()
+        )
+    except Exception as exc:
+        if _erro_tabela_ausente(exc, "bb_credenciais"):
+            return pd.DataFrame()
+        raise
+    return pd.DataFrame(resposta.data or [])
+
+
+def salvar_bb_credenciais(
+    supabase: Client,
+    user_id: str,
+    cnpj: str,
+    client_id: str,
+    client_secret: str,
+    app_key: str,
+    ambiente: str,
+    razao_social: str = "",
+) -> None:
+    from datetime import datetime, timezone
+
+    cnpj_norm = normalizar_cnpj_credencial(cnpj)
+    ambiente = (ambiente or "homologacao").strip().lower()
+    if not cnpj_norm:
+        raise ValueError("Informe o CNPJ do beneficiario.")
+    if ambiente not in ("sandbox", "homologacao", "producao"):
+        raise ValueError("Ambiente invalido. Use sandbox, homologacao ou producao.")
+    if not client_id.strip() or not client_secret.strip() or not app_key.strip():
+        raise ValueError("Preencha Client ID, Client Secret e App Key.")
+    payload = {
+        "user_id": user_id,
+        "cnpj": cnpj_norm,
+        "razao_social": (razao_social or "").strip() or None,
+        "client_id": client_id.strip(),
+        "client_secret": client_secret.strip(),
+        "app_key": app_key.strip(),
+        "ambiente": ambiente,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    supabase.table("bb_credenciais").upsert(payload, on_conflict="user_id,cnpj").execute()
+
+
+def excluir_bb_credenciais(supabase: Client, user_id: str, cnpj: str) -> None:
+    cnpj_norm = normalizar_cnpj_credencial(cnpj)
+    if not cnpj_norm:
+        raise ValueError("CNPJ invalido.")
+    supabase.table("bb_credenciais").delete().eq("user_id", user_id).eq(
+        "cnpj", cnpj_norm
+    ).execute()
+
+
 def tabela_remessa_valores_disponivel(supabase: Client) -> bool:
     try:
         supabase.table("remessa_valores").select("id").limit(1).execute()

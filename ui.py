@@ -22,7 +22,11 @@ from bb_api import (
     INSTRUCOES_API_LABEL,
     bb_credenciais_configuradas,
     enviar_lotes_api,
+    ativar_credenciais_bb,
+    limpar_cache_token_bb,
     mensagem_credenciais_bb,
+    sincronizar_credenciais_bb_sessao,
+    testar_conexao_bb,
 )
 from cnab import (
     buscar_valor_registrado,
@@ -33,10 +37,12 @@ from cnab import (
     normalizar_valor_monetario,
 )
 from config import (
+    ABA_API_BB_TAB,
     ABA_CONVENIOS_TAB,
     ABA_HISTORICO_TAB,
     ABA_VALORES_TAB,
     FONTE_APP,
+    TITULO_API_BB_HTML,
     INSTRUCOES_CNAB,
     MODOS_REFERENCIA_VALORES,
     PREVIEW_LINHAS,
@@ -64,10 +70,12 @@ from db import (
     criar_cliente,
     criar_clientes_lote,
     criar_convenio,
+    excluir_bb_credenciais,
     excluir_clientes,
     excluir_convenio,
     excluir_titulo_valor,
     listar_bases_compartilhadas,
+    listar_bb_credenciais,
     listar_clientes,
     listar_compartilhamentos_dono,
     listar_convenios,
@@ -76,9 +84,12 @@ from db import (
     listar_remessas_com_valores,
     listar_remessas_por_convenio,
     listar_titulos_valores,
+    normalizar_cnpj_credencial,
+    obter_bb_credenciais,
     obter_ultima_remessa_com_valores,
     obter_valores_referencia,
     remover_compartilhamento,
+    salvar_bb_credenciais,
     salvar_remessa,
     salvar_remessa_resiliente,
     salvar_snapshot_valores_remessa,
@@ -618,8 +629,15 @@ def render_sidebar(supabase: Client, user):
             st.session_state.workspace_user_id = novo_id
             st.session_state.lotes = []
             st.session_state.remessa_gerada = None
+            limpar_cache_token_bb()
+            st.session_state.pop("bb_credenciais_workspace", None)
             st.rerun()
         workspace_user_id = novo_id
+
+    if st.session_state.get("bb_creds_workspace_id") != str(workspace_user_id):
+        sincronizar_credenciais_bb_sessao(None)
+        st.session_state.bb_creds_workspace_id = str(workspace_user_id)
+        limpar_cache_token_bb()
 
     if st.sidebar.button("Atualizar tela", use_container_width=True, help="Recarrega o app (use isto em vez de Ctrl+F5)"):
         st.cache_data.clear()
@@ -631,11 +649,16 @@ def render_sidebar(supabase: Client, user):
     render_compartilhamento(supabase, user, workspace_user_id)
     st.sidebar.markdown("---")
     st.sidebar.caption("CNAB 240 · Banco do Brasil")
-    if bb_credenciais_configuradas():
-        st.sidebar.caption("API BB: credenciais OK")
+    try:
+        df_creds = listar_bb_credenciais(supabase, str(workspace_user_id))
+        qtd_creds = 0 if df_creds.empty else len(df_creds)
+    except Exception:
+        qtd_creds = 0
+    if qtd_creds:
+        st.sidebar.caption(f"API BB: {qtd_creds} CNPJ(s) com credencial")
     else:
-        st.sidebar.caption("API BB: credenciais pendentes")
-    st.sidebar.caption("Versao interface: 2026.10.05c")
+        st.sidebar.caption("API BB: configure por CNPJ na aba API BB")
+    st.sidebar.caption("Versao interface: 2026.10.06b")
     return workspace_user_id
 
 
@@ -1309,11 +1332,14 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
 
         if enviar_api:
             try:
+                dados_bancarios = dados_conv_sel.to_dict()
+                cnpj_conv = normalizar_cnpj_credencial(str(dados_bancarios.get("cnpj") or ""))
+                creds_cnpj = obter_bb_credenciais(supabase, user_id, cnpj_conv) if cnpj_conv else None
+                ativar_credenciais_bb(creds_cnpj)
                 if not bb_credenciais_configuradas():
-                    st.error(mensagem_credenciais_bb())
+                    st.error(mensagem_credenciais_bb(cnpj_conv or "(sem CNPJ no convenio)"))
                     return
 
-                dados_bancarios = dados_conv_sel.to_dict()
                 lotes_atuais = list(st.session_state.lotes)
                 convenio_id = convenio_id_sel
                 valores_conhecidos: dict[str, float] = {}
@@ -1334,7 +1360,10 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                         f"Nao foi possivel consultar valores de referencia: {exc}"
                     )
 
-                with st.spinner("Enviando instrucoes para a API do Banco do Brasil..."):
+                with st.spinner(
+                    f"Enviando via API BB (CNPJ {cnpj_conv}, ambiente "
+                    f"{(creds_cnpj or {}).get('ambiente', '?')})..."
+                ):
                     resultado_api = enviar_lotes_api(
                         lotes_atuais,
                         dados_bancarios,
@@ -1672,6 +1701,190 @@ def render_valores_nominais(
                 st.error(traduzir_erro_db(exc))
 
 
+def _cnpjs_dos_convenios(df_convenios: pd.DataFrame) -> pd.DataFrame:
+    """CNPJs distintos dos convênios, com razão social e qtd de convênios."""
+    if df_convenios is None or df_convenios.empty or "cnpj" not in df_convenios.columns:
+        return pd.DataFrame(columns=["cnpj", "razao_social", "qtd_convenios"])
+    df = df_convenios.copy()
+    df["cnpj_norm"] = df["cnpj"].apply(normalizar_cnpj_credencial)
+    df = df[df["cnpj_norm"].astype(str).str.len() > 0]
+    if df.empty:
+        return pd.DataFrame(columns=["cnpj", "razao_social", "qtd_convenios"])
+    agrupado = (
+        df.groupby("cnpj_norm", as_index=False)
+        .agg(
+            razao_social=("razao_social", "first"),
+            qtd_convenios=("cnpj_norm", "count"),
+        )
+        .rename(columns={"cnpj_norm": "cnpj"})
+    )
+    return agrupado.sort_values("razao_social", na_position="last").reset_index(drop=True)
+
+
+def render_api_bb(supabase: Client, user_id: str, df_convenios: pd.DataFrame):
+    _render_titulo(TITULO_API_BB_HTML)
+    st.caption(
+        "Cole as credenciais do Portal Developers BB **por CNPJ**. "
+        "Todos os convênios do mesmo CNPJ usam a mesma chave."
+    )
+
+    df_cnpjs = _cnpjs_dos_convenios(df_convenios)
+    try:
+        df_creds = listar_bb_credenciais(supabase, user_id)
+    except Exception as exc:
+        st.warning(
+            "Nao foi possivel listar credenciais. Execute "
+            "`supabase/migrations/008_bb_credenciais.sql` no Supabase. "
+            f"({traduzir_erro_db(exc)})"
+        )
+        df_creds = pd.DataFrame()
+
+    cnpjs_ok = set()
+    if not df_creds.empty and "cnpj" in df_creds.columns:
+        cnpjs_ok = set(df_creds["cnpj"].astype(str).tolist())
+
+    if df_cnpjs.empty:
+        st.info(
+            f"Cadastre ao menos um convenio na aba **{ABA_CONVENIOS_TAB}** "
+            "para vincular credenciais ao CNPJ."
+        )
+        return
+
+    # Status por CNPJ
+    linhas_status = []
+    for _, row in df_cnpjs.iterrows():
+        cnpj = str(row["cnpj"])
+        linhas_status.append(
+            {
+                "CNPJ": cnpj,
+                "Razao Social": row.get("razao_social") or "",
+                "Convenios": int(row.get("qtd_convenios") or 0),
+                "API BB": "Configurado" if cnpj in cnpjs_ok else "Pendente",
+            }
+        )
+    _tabela_zebra(pd.DataFrame(linhas_status), altura_max=320)
+
+    st.divider()
+    st.subheader("Colar credenciais do CNPJ")
+
+    opcoes = [
+        f"{row['cnpj']} — {row.get('razao_social') or 'S/N'} ({int(row['qtd_convenios'])} convenio(s))"
+        for _, row in df_cnpjs.iterrows()
+    ]
+    escolha = st.selectbox("CNPJ beneficiario", opcoes, key="sel_cnpj_api_bb")
+    cnpj_sel = escolha.split(" — ")[0].strip()
+    razao_sel = str(
+        df_cnpjs[df_cnpjs["cnpj"] == cnpj_sel].iloc[0].get("razao_social") or ""
+    )
+
+    atuais = obter_bb_credenciais(supabase, user_id, cnpj_sel) or {}
+    ambientes = ["sandbox", "homologacao", "producao"]
+    ambiente_atual = str(atuais.get("ambiente") or "homologacao")
+    if ambiente_atual not in ambientes:
+        ambiente_atual = "homologacao"
+
+    if atuais.get("client_id"):
+        st.success(f"Este CNPJ ja tem credenciais ({ambiente_atual}). Voce pode atualizar abaixo.")
+    else:
+        st.warning("Este CNPJ ainda nao tem credenciais da API.")
+
+    with st.form("form_credenciais_bb_cnpj"):
+        client_id = st.text_input(
+            "Client ID",
+            value=str(atuais.get("client_id") or ""),
+            help="Portal Developers BB → aplicacao → Credenciais",
+        )
+        client_secret = st.text_input(
+            "Client Secret",
+            value=str(atuais.get("client_secret") or ""),
+            type="password",
+        )
+        app_key = st.text_input(
+            "App Key (gw-dev-app-key)",
+            value=str(atuais.get("app_key") or ""),
+        )
+        ambiente = st.selectbox(
+            "Ambiente",
+            ambientes,
+            index=ambientes.index(ambiente_atual),
+        )
+        col_salvar, col_testar = st.columns(2)
+        salvar = col_salvar.form_submit_button("Salvar neste CNPJ", type="primary")
+        testar = col_testar.form_submit_button("Testar conexao")
+
+    if salvar:
+        try:
+            salvar_bb_credenciais(
+                supabase,
+                user_id,
+                cnpj_sel,
+                client_id,
+                client_secret,
+                app_key,
+                ambiente,
+                razao_social=razao_sel,
+            )
+            ativar_credenciais_bb(
+                {
+                    "cnpj": cnpj_sel,
+                    "client_id": client_id.strip(),
+                    "client_secret": client_secret.strip(),
+                    "app_key": app_key.strip(),
+                    "ambiente": ambiente,
+                    "scopes": "",
+                }
+            )
+            st.success(f"Credenciais salvas para o CNPJ {cnpj_sel}.")
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+        except Exception as exc:
+            st.error(traduzir_erro_db(exc))
+            st.info(
+                "Se a tabela nao existe, execute no SQL Editor: "
+                "`supabase/migrations/008_bb_credenciais.sql`"
+            )
+
+    if testar:
+        ativar_credenciais_bb(
+            {
+                "cnpj": cnpj_sel,
+                "client_id": client_id.strip(),
+                "client_secret": client_secret.strip(),
+                "app_key": app_key.strip(),
+                "ambiente": ambiente,
+                "scopes": "",
+            }
+        )
+        ok, msg = testar_conexao_bb()
+        if ok:
+            st.success(msg)
+        else:
+            st.error(msg)
+
+    if atuais.get("client_id"):
+        if st.button("Remover credenciais deste CNPJ", key="btn_remover_bb_creds_cnpj"):
+            try:
+                excluir_bb_credenciais(supabase, user_id, cnpj_sel)
+                sincronizar_credenciais_bb_sessao(None)
+                limpar_cache_token_bb()
+                st.success("Credenciais removidas deste CNPJ.")
+                st.rerun()
+            except Exception as exc:
+                st.error(traduzir_erro_db(exc))
+
+    with st.expander("Dados de homologacao BB (referencia)"):
+        st.markdown(
+            f"""
+- Convenio: `{HOMOLOG_CONVENIO}`
+- Agencia: `{HOMOLOG_AGENCIA}` | Conta: `{HOMOLOG_CONTA}`
+- Carteira: `{HOMOLOG_CARTEIRA}` / variacao `{HOMOLOG_VARIACAO}`
+- Nosso numero API: `000` + convenio(7) + controle(10)
+- Alteracao/baixa: so apos 30 minutos da geracao do boleto
+            """
+        )
+
+
 def render_app(supabase: Client):
     aplicar_estilo()
     user = st.session_state.user
@@ -1685,7 +1898,8 @@ def render_app(supabase: Client):
         rotulo = next((b["label"] for b in bases if b["id"] == str(user_id)), "base compartilhada")
         st.info(
             f"Voce esta usando a **{rotulo}**. "
-            "Clientes, convenios, historico e remessas desta base sao os mesmos para todos com acesso."
+            "Clientes, convenios, historico, remessas e **credenciais API por CNPJ** "
+            "desta base sao os mesmos para todos com acesso."
         )
 
     try:
@@ -1698,8 +1912,22 @@ def render_app(supabase: Client):
     except Exception:
         df_convenios = pd.DataFrame()
 
-    aba_gerador, aba_clientes, aba_convenios, aba_valores, aba_historico = st.tabs(
-        ["Gerar Remessa", "Meus Clientes", ABA_CONVENIOS_TAB, ABA_VALORES_TAB, ABA_HISTORICO_TAB]
+    (
+        aba_gerador,
+        aba_clientes,
+        aba_convenios,
+        aba_api_bb,
+        aba_valores,
+        aba_historico,
+    ) = st.tabs(
+        [
+            "Gerar Remessa",
+            "Meus Clientes",
+            ABA_CONVENIOS_TAB,
+            ABA_API_BB_TAB,
+            ABA_VALORES_TAB,
+            ABA_HISTORICO_TAB,
+        ]
     )
 
     with aba_gerador:
@@ -1710,6 +1938,9 @@ def render_app(supabase: Client):
 
     with aba_convenios:
         render_convenios(supabase, user_id)
+
+    with aba_api_bb:
+        render_api_bb(supabase, user_id, df_convenios)
 
     with aba_valores:
         render_valores_nominais(supabase, user_id, df_convenios)

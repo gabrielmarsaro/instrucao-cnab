@@ -129,25 +129,37 @@ class BbApiError(Exception):
     """Erro de configuração ou autenticação com a API do BB."""
 
 
-def _secrets_bb() -> dict:
-    bloco = st.secrets.get("bb", {})
-    if hasattr(bloco, "to_dict"):
-        bloco = dict(bloco)
-    elif not isinstance(bloco, dict):
-        bloco = {}
+def _cfg_vazia() -> dict:
     return {
-        "client_id": str(bloco.get("client_id") or st.secrets.get("BB_CLIENT_ID", "")).strip(),
-        "client_secret": str(
-            bloco.get("client_secret") or st.secrets.get("BB_CLIENT_SECRET", "")
-        ).strip(),
-        "app_key": str(bloco.get("app_key") or st.secrets.get("BB_APP_KEY", "")).strip(),
-        "ambiente": str(
-            bloco.get("ambiente") or st.secrets.get("BB_AMBIENTE", "sandbox")
-        )
-        .strip()
-        .lower(),
-        "scopes": str(bloco.get("scopes") or "").strip(),
+        "client_id": "",
+        "client_secret": "",
+        "app_key": "",
+        "ambiente": "homologacao",
+        "scopes": "",
     }
+
+
+def _secrets_bb() -> dict:
+    """Credenciais por base/cliente (aba API BB no Supabase). Sem chave global compartilhada."""
+    salvas = st.session_state.get("bb_credenciais_workspace") or {}
+    return {
+        "client_id": str(salvas.get("client_id") or "").strip(),
+        "client_secret": str(salvas.get("client_secret") or "").strip(),
+        "app_key": str(salvas.get("app_key") or "").strip(),
+        "ambiente": str(salvas.get("ambiente") or "homologacao").strip().lower(),
+        "scopes": str(salvas.get("scopes") or "").strip(),
+    }
+
+
+def sincronizar_credenciais_bb_sessao(cfg: dict | None) -> None:
+    """Atualiza o cache da sessao com as credenciais da base atual."""
+    st.session_state.bb_credenciais_workspace = dict(cfg or _cfg_vazia())
+
+
+def limpar_cache_token_bb() -> None:
+    st.session_state.pop("bb_access_token", None)
+    st.session_state.pop("bb_token_expira_em", None)
+    st.session_state.pop("bb_scopes_ativos", None)
 
 
 def bb_credenciais_configuradas() -> bool:
@@ -155,18 +167,35 @@ def bb_credenciais_configuradas() -> bool:
     return bool(cfg["client_id"] and cfg["client_secret"] and cfg["app_key"])
 
 
-def mensagem_credenciais_bb() -> str:
+def mensagem_credenciais_bb(cnpj: str = "") -> str:
+    trecho = f" do CNPJ `{cnpj}`" if cnpj else " deste CNPJ"
     return (
-        "Credenciais da API do BB nao configuradas. "
-        "Preencha em `.streamlit/secrets.toml` (ou Secrets do Streamlit Cloud):\n\n"
-        "```toml\n"
-        "[bb]\n"
-        'client_id = "..."\n'
-        'client_secret = "..."\n'
-        'app_key = "..."\n'
-        'ambiente = "sandbox"  # sandbox | homologacao | producao\n'
-        "```"
+        f"Credenciais da API do BB{trecho} nao configuradas. "
+        "Abra a aba **API BB**, selecione o CNPJ e cole Client ID, Client Secret, App Key e ambiente."
     )
+
+
+def ativar_credenciais_bb(cfg: dict | None) -> None:
+    """Define na sessao as credenciais do CNPJ que sera usado na chamada API."""
+    sincronizar_credenciais_bb_sessao(cfg)
+    limpar_cache_token_bb()
+
+
+def testar_conexao_bb() -> tuple[bool, str]:
+    """Tenta obter token OAuth. Retorna (ok, mensagem)."""
+    try:
+        limpar_cache_token_bb()
+        obter_token(force=True)
+        cfg = _secrets_bb()
+        escopo = st.session_state.get("bb_scopes_ativos") or "(padrao)"
+        return (
+            True,
+            f"Conexao OK no ambiente **{cfg['ambiente']}** (escopo: `{escopo}`).",
+        )
+    except BbApiError as exc:
+        return False, str(exc)
+    except Exception as exc:
+        return False, f"Falha na conexao: {exc}"
 
 
 def _ambiente_urls(ambiente: str) -> dict[str, str]:

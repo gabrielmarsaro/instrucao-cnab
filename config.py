@@ -5,6 +5,7 @@
 ABA_CONVENIOS_TAB = "Convenios"
 ABA_HISTORICO_TAB = "Historico"
 ABA_VALORES_TAB = "Valores Nominais"
+ABA_API_BB_TAB = "API BB"
 
 # Texto em markdown/mensagens (fora de st.tabs)
 ABA_CONVENIOS = "Conv\u00eanios"
@@ -21,6 +22,9 @@ TITULO_HISTORICO_HTML = (
 )
 TITULO_VALORES_NOMINAIS_HTML = (
     "<h2 style='margin:0;padding:0;'>Valores Nominais Registrados</h2>"
+)
+TITULO_API_BB_HTML = (
+    "<h2 style='margin:0;padding:0;'>Credenciais API Banco do Brasil</h2>"
 )
 
 # Segoe UI primeiro — Calibri em abas do Chrome no Windows costuma corromper acentos

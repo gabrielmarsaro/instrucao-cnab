@@ -80,4 +80,9 @@ def logout(supabase: Client) -> None:
     st.session_state.workspace_user_id = None
     st.session_state.lotes = []
     st.session_state.remessa_gerada = None
+    st.session_state.pop("bb_credenciais_workspace", None)
+    st.session_state.pop("bb_creds_workspace_id", None)
+    st.session_state.pop("bb_access_token", None)
+    st.session_state.pop("bb_token_expira_em", None)
+    st.session_state.pop("bb_scopes_ativos", None)
     st.rerun()
