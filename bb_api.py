@@ -636,6 +636,12 @@ def _extrair_erro_bb(resp: httpx.Response) -> str:
     return (" ".join(partes) if partes else f"HTTP {resp.status_code}")[:800]
 
 
+def _anexar_chamada(linha: ResultadoLinhaApi, chamada: dict | None) -> ResultadoLinhaApi:
+    if chamada:
+        linha.chamada = chamada
+    return linha
+
+
 def _resultado_erro(
     nn: str,
     mensagem: str,
@@ -957,17 +963,12 @@ def _executar_instrucao_linha(
     boleto_id = _montar_id_boleto(convenio_raw, nn)
     titulo_atualizar = None
     valor_enviado = None
-    chamada: dict | None = None
-
-    def _com_chamada(linha: ResultadoLinhaApi) -> ResultadoLinhaApi:
-        if chamada is not None:
-            linha.chamada = chamada
-        return linha
+    dados_chamada: dict | None = None
 
     try:
         if cod == "02":
             corpo_baixa = {"numeroConvenio": numero_convenio}
-            chamada = {
+            dados_chamada = {
                 "metodo": "POST",
                 "caminho": f"/boletos/{boleto_id}/baixar",
                 "corpo": corpo_baixa,
@@ -1039,10 +1040,10 @@ def _executar_instrucao_linha(
 
             # BB: uma alteracao por PATCH. Se montante diverge em 06/09/10,
             # nao corrige aqui — sinaliza no resultado via aviso embutido na mensagem se falhar.
-            chamada = {
+            dados_chamada = {
                 "metodo": "PATCH",
                 "caminho": f"/boletos/{boleto_id}",
-                "corpo": corpo,
+                "corpo": dict(corpo),
             }
             resp = _request_bb(
                 "PATCH", f"/boletos/{boleto_id}", json_body=corpo, client=client
@@ -1060,21 +1061,23 @@ def _executar_instrucao_linha(
             )
     except BbApiError as exc:
         return (
-            _com_chamada(
-                _resultado_erro(nn, str(exc), boleto_id=boleto_id, instrucao=cod)
+            _anexar_chamada(
+                _resultado_erro(nn, str(exc), boleto_id=boleto_id, instrucao=cod),
+                dados_chamada,
             ),
             None,
             None,
         )
     except Exception as exc:
         return (
-            _com_chamada(
+            _anexar_chamada(
                 _resultado_erro(
                     nn,
                     f"Erro de comunicacao: {exc}",
                     boleto_id=boleto_id,
                     instrucao=cod,
-                )
+                ),
+                dados_chamada,
             ),
             None,
             None,
@@ -1091,7 +1094,7 @@ def _executar_instrucao_linha(
             "cod_instrucao": cod,
         }
         return (
-            _com_chamada(
+            _anexar_chamada(
                 ResultadoLinhaApi(
                     nosso_numero=nn,
                     sucesso=True,
@@ -1099,7 +1102,8 @@ def _executar_instrucao_linha(
                     status_http=resp.status_code,
                     boleto_id=boleto_id,
                     instrucao=cod,
-                )
+                ),
+                dados_chamada,
             ),
             titulo_atualizar,
             valor_enviado,
@@ -1119,7 +1123,7 @@ def _executar_instrucao_linha(
         mensagem_final = mensagem_bb or _extrair_erro_bb(resp)
 
     return (
-        _com_chamada(
+        _anexar_chamada(
             _resultado_erro(
                 nn,
                 mensagem_final,
@@ -1128,7 +1132,8 @@ def _executar_instrucao_linha(
                 status_http=resp.status_code,
                 codigo_bb=codigo_bb,
                 providencia=providencia,
-            )
+            ),
+            dados_chamada,
         ),
         None,
         None,

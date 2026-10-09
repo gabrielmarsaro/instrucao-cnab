@@ -1913,7 +1913,6 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                         **(linha.chamada or {}),
                     }
                     for linha in resultado_api.linhas
-                    if linha.chamada
                 ]
                 st.session_state.ultima_consulta_erros_bb = None
 
