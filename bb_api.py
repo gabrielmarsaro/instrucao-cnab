@@ -1248,10 +1248,12 @@ def enviar_lotes_api(
     obter_token()
     pular = {limpar_nosso_numero(n) for n in (pular_nosso_numeros or set()) if n}
 
-    # Conta total para progresso
+    # Conta total para progresso. DataFrame nao pode entrar em `or` (verdade ambigua).
     total_previsto = 0
     for lote in lotes:
-        total_previsto += len(lote.get("df") or [])
+        df_lote = lote.get("df")
+        if df_lote is not None:
+            total_previsto += len(df_lote)
     feitos = 0
 
     with httpx.Client(timeout=45.0) as client:
@@ -1259,10 +1261,9 @@ def enviar_lotes_api(
             cod = _codigo_instrucao(lote)
             dias_protesto = int(lote.get("dias_protesto") or 3)
             if cod not in INSTRUCOES_API_SUPORTADAS:
-                df = lote["df"]
-                colunas_map = mapear_colunas_planilha(
-                    df.assign(columns={c: str(c).strip().lower() for c in df.columns})
-                )
+                df = lote["df"].copy()
+                df.columns = [str(c).strip().lower() for c in df.columns]
+                colunas_map = mapear_colunas_planilha(df)
                 for _, row in df.iterrows():
                     nn = limpar_nosso_numero(row.get(colunas_map.get("nn", ""), ""))
                     resultado.total += 1
