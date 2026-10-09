@@ -1914,6 +1914,7 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                             "instrucao": linha.instrucao,
                             "http": linha.status_http,
                             "sucesso": linha.sucesso,
+                            "mensagem": linha.mensagem,
                             **(linha.chamada or {}),
                         }
                         for linha in resultado_api.linhas
@@ -1966,7 +1967,7 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                 nns_ok_agora = {
                     limpar_nosso_numero(l.nosso_numero)
                     for l in resultado_api.linhas
-                    if l.sucesso and l.nosso_numero
+                    if l.sucesso and l.status_http is not None and l.nosso_numero
                 }
                 ja_ok |= nns_ok_agora
                 st.session_state.api_nn_enviados_ok = list(ja_ok)
@@ -1997,6 +1998,22 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                             "Boletos OK sairam do carrinho — reenvie so os erros."
                         ),
                         "erros": erros_api,
+                        "avisos": avisos_api,
+                        "chamadas": chamadas_envio,
+                    }
+                elif resultado_api.ignorados and resultado_api.falhas == 0:
+                    st.session_state.feedback_geracao = {
+                        "sucesso": False,
+                        "mensagem": (
+                            f"API BB: nenhum PATCH novo. **{resultado_api.ignorados}** "
+                            "boleto(s) ja tinham sido enviados nesta sessao. "
+                            "Recarregue a pagina para mandar de novo."
+                        ),
+                        "erros": [
+                            f"{linha.nosso_numero}: {linha.mensagem}"
+                            for linha in resultado_api.linhas
+                            if not linha.sucesso
+                        ],
                         "avisos": avisos_api,
                         "chamadas": chamadas_envio,
                     }

@@ -164,6 +164,7 @@ class ResultadoEnvioApi:
     total: int = 0
     sucessos: int = 0
     falhas: int = 0
+    ignorados: int = 0
     linhas: list[ResultadoLinhaApi] = field(default_factory=list)
     avisos: list[str] = field(default_factory=list)
     titulos_atualizar: list[dict] = field(default_factory=list)
@@ -695,6 +696,7 @@ def _anexar_chamada(linha: ResultadoLinhaApi, chamada: dict | None) -> Resultado
         "instrucao": linha.instrucao,
         "http": linha.status_http,
         "sucesso": linha.sucesso,
+        "mensagem": linha.mensagem,
         **registro,
     }
     try:
@@ -1290,15 +1292,45 @@ def enviar_lotes_api(
                 nn = limpar_nosso_numero(row.get(colunas_map.get("nn", ""), ""))
                 if nn and nn in pular:
                     feitos += 1
-                    resultado.sucessos += 1
-                    resultado.linhas.append(
-                        ResultadoLinhaApi(
-                            nosso_numero=nn,
-                            sucesso=True,
-                            mensagem="Ignorado: ja enviado com sucesso nesta sessao.",
-                            instrucao=cod,
-                        )
+                    resultado.ignorados += 1
+                    convenio_nn = "".join(
+                        filter(str.isdigit, str(dados_bancarios.get("convenio", "")))
                     )
+                    try:
+                        boleto_ignorado = (
+                            _montar_id_boleto(convenio_nn, nn) if convenio_nn else ""
+                        )
+                    except BbApiError:
+                        boleto_ignorado = ""
+                    linha_ignorada = ResultadoLinhaApi(
+                        nosso_numero=nn,
+                        sucesso=False,
+                        mensagem=(
+                            "Nao reenviado: este nosso numero ja tinha sido "
+                            "enviado com sucesso nesta sessao. Recarregue a pagina "
+                            "para mandar de novo."
+                        ),
+                        boleto_id=boleto_ignorado,
+                        instrucao=cod,
+                    )
+                    resultado.linhas.append(linha_ignorada)
+                    try:
+                        lista_chamadas = st.session_state.get("ultimo_chamadas_api")
+                        if not isinstance(lista_chamadas, list):
+                            lista_chamadas = []
+                        lista_chamadas.append(
+                            {
+                                "nosso_numero": nn,
+                                "boleto_id": boleto_ignorado,
+                                "instrucao": cod,
+                                "http": None,
+                                "sucesso": False,
+                                "mensagem": linha_ignorada.mensagem,
+                            }
+                        )
+                        st.session_state.ultimo_chamadas_api = lista_chamadas
+                    except Exception:
+                        pass
                     if on_progress:
                         on_progress(feitos, total_previsto, nn)
                     continue
