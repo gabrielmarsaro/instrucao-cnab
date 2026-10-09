@@ -422,16 +422,51 @@ def ativar_credenciais_bb(cfg: dict | None) -> None:
     limpar_cache_token_bb()
 
 
+def _app_key_rejeitada(resp: httpx.Response) -> bool:
+    texto = (resp.text or "").lower()
+    return resp.status_code == 403 and (
+        "appkey" in texto or "chave de aplicacao" in texto or "chave de aplicação" in texto
+    )
+
+
 def testar_conexao_bb() -> tuple[bool, str]:
-    """Tenta obter token OAuth. Retorna (ok, mensagem)."""
+    """OAuth e, em seguida, a API de cobranca — o token nao valida a App Key."""
     try:
         limpar_cache_token_bb()
         obter_token(force=True)
         cfg = _secrets_bb()
         escopo = st.session_state.get("bb_scopes_ativos") or "(padrao)"
+        urls = _ambiente_urls(cfg["ambiente"])
+        sufixo = cfg["app_key"][-4:] if len(cfg["app_key"]) >= 4 else ""
+        with httpx.Client(timeout=30.0) as client:
+            sonda = client.get(
+                f"{urls['api_url']}/boletos",
+                params={"gw-dev-app-key": cfg["app_key"]},
+                headers={
+                    "Authorization": f"Bearer {st.session_state.bb_access_token}",
+                    "Accept": "application/json",
+                },
+            )
+        if _app_key_rejeitada(sonda):
+            return (
+                False,
+                f"Token OAuth OK no ambiente **{cfg['ambiente']}** "
+                f"(escopo: `{escopo}`), mas o BB recusou a App Key"
+                + (f" terminada em `{sufixo}`" if sufixo else "")
+                + ". Cole a developer_application_key das credenciais de "
+                "**producao** da mesma aplicacao. A chave de homologacao "
+                "nao vale em producao.",
+            )
+        if sonda.status_code == 403:
+            return (
+                False,
+                f"Token OAuth OK no ambiente **{cfg['ambiente']}**, "
+                f"mas a API de cobranca recusou o acesso: {_extrair_erro_bb(sonda)}",
+            )
         return (
             True,
-            f"Conexao OK no ambiente **{cfg['ambiente']}** (escopo: `{escopo}`).",
+            f"Conexao OK no ambiente **{cfg['ambiente']}** "
+            f"(escopo: `{escopo}`). App Key aceita pela API de cobranca.",
         )
     except BbApiError as exc:
         return False, str(exc)
@@ -618,6 +653,13 @@ def _extrair_erro_bb_detalhado(resp: httpx.Response) -> tuple[str, str, str]:
         return "", erros[:500], ""
     if any(k in data for k in ("codigo", "codigoMensagem", "code", "mensagem", "textoMensagem")):
         return _parse_item_erro_bb(data)
+    detalhe = str(data.get("detail") or data.get("userHelp") or "").strip()
+    if detalhe:
+        codigo = str(data.get("errorCode") or data.get("status") or "").strip()
+        ajuda = str(data.get("userHelp") or "").strip()
+        if ajuda and ajuda not in detalhe:
+            detalhe = f"{detalhe} {ajuda}"
+        return codigo, detalhe[:500], ""
     msg = data.get("message") or data.get("mensagem") or data.get("error_description")
     if msg:
         return str(data.get("error") or data.get("statusCode") or ""), str(msg)[:500], ""
