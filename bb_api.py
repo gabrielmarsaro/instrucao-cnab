@@ -637,8 +637,32 @@ def _extrair_erro_bb(resp: httpx.Response) -> str:
 
 
 def _anexar_chamada(linha: ResultadoLinhaApi, chamada: dict | None) -> ResultadoLinhaApi:
-    if chamada:
-        linha.chamada = chamada
+    """Guarda o corpo na linha e na sessao, no momento da requisicao."""
+    if not chamada:
+        return linha
+    corpo = json.loads(json.dumps(chamada.get("corpo") or {}, default=str))
+    registro = {
+        "metodo": chamada.get("metodo"),
+        "caminho": chamada.get("caminho"),
+        "corpo": corpo,
+    }
+    linha.chamada = registro
+    item = {
+        "nosso_numero": linha.nosso_numero,
+        "boleto_id": linha.boleto_id,
+        "instrucao": linha.instrucao,
+        "http": linha.status_http,
+        "sucesso": linha.sucesso,
+        **registro,
+    }
+    try:
+        lista = st.session_state.get("ultimo_chamadas_api")
+        if not isinstance(lista, list):
+            lista = []
+        lista.append(item)
+        st.session_state.ultimo_chamadas_api = lista
+    except Exception:
+        pass
     return linha
 
 
@@ -1150,6 +1174,11 @@ def enviar_lotes_api(
 ) -> ResultadoEnvioApi:
     """Envia cada boleto dos lotes para a API Cobranças do BB."""
     resultado = ResultadoEnvioApi()
+    try:
+        st.session_state.ultimo_chamadas_api = []
+        st.session_state.mostrar_json_chamada_api = False
+    except Exception:
+        pass
     if not bb_credenciais_configuradas():
         raise BbApiError(mensagem_credenciais_bb())
 

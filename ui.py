@@ -386,9 +386,12 @@ def _exibir_json_chamada_api() -> None:
 
     chamadas = st.session_state.get("ultimo_chamadas_api") or []
     if not chamadas:
+        feedback = st.session_state.get("feedback_geracao") or {}
+        chamadas = feedback.get("chamadas") or []
+    if not chamadas:
         st.warning(
-            "Este envio nao guardou o JSON da chamada. "
-            "Envie a planilha de novo nesta versao e clique no botao outra vez."
+            "Nenhuma chamada HTTP foi registrada neste envio. "
+            "Se o erro foi antes de falar com o BB (token ou credencial), nao ha corpo para mostrar."
         )
         return
 
@@ -1902,18 +1905,20 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                 st.session_state.ultimo_api_convenio = "".join(
                     filter(str.isdigit, str(dados_bancarios.get("convenio", "")))
                 )
-                st.session_state.mostrar_json_chamada_api = False
-                st.session_state.ultimo_chamadas_api = [
-                    {
-                        "nosso_numero": linha.nosso_numero,
-                        "boleto_id": linha.boleto_id,
-                        "instrucao": linha.instrucao,
-                        "http": linha.status_http,
-                        "sucesso": linha.sucesso,
-                        **(linha.chamada or {}),
-                    }
-                    for linha in resultado_api.linhas
-                ]
+                chamadas_envio = list(st.session_state.get("ultimo_chamadas_api") or [])
+                if not chamadas_envio:
+                    chamadas_envio = [
+                        {
+                            "nosso_numero": linha.nosso_numero,
+                            "boleto_id": linha.boleto_id,
+                            "instrucao": linha.instrucao,
+                            "http": linha.status_http,
+                            "sucesso": linha.sucesso,
+                            **(linha.chamada or {}),
+                        }
+                        for linha in resultado_api.linhas
+                    ]
+                st.session_state.ultimo_chamadas_api = chamadas_envio
                 st.session_state.ultima_consulta_erros_bb = None
 
                 preview = []
@@ -1978,6 +1983,7 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                         ),
                         "erros": [],
                         "avisos": avisos_api,
+                        "chamadas": chamadas_envio,
                     }
                 elif resultado_api.sucessos:
                     st.session_state.lotes = _filtrar_lotes_sem_nns(
@@ -1992,6 +1998,7 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                         ),
                         "erros": erros_api,
                         "avisos": avisos_api,
+                        "chamadas": chamadas_envio,
                     }
                 else:
                     st.session_state.feedback_geracao = {
@@ -2002,6 +2009,7 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                         ),
                         "erros": erros_api,
                         "avisos": avisos_api,
+                        "chamadas": chamadas_envio,
                     }
                 st.session_state.feedback_geracao_aberto = False
                 st.rerun()
@@ -2013,6 +2021,7 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                     "mensagem": str(exc),
                     "erros": [str(exc)],
                     "avisos": [],
+                    "chamadas": list(st.session_state.get("ultimo_chamadas_api") or []),
                 }
                 st.session_state.feedback_geracao_aberto = False
                 st.rerun()
@@ -2024,6 +2033,7 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                     "mensagem": f"Erro ao enviar pela API do BB: {traduzir_erro_db(exc)}",
                     "erros": [traduzir_erro_db(exc)],
                     "avisos": [],
+                    "chamadas": list(st.session_state.get("ultimo_chamadas_api") or []),
                 }
                 st.session_state.feedback_geracao_aberto = False
                 st.rerun()
