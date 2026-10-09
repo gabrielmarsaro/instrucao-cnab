@@ -368,7 +368,27 @@ def _exibir_resultado_api_tabela():
         key="btn_csv_resultado_api",
     )
 
+    _exibir_json_chamada_api()
     _exibir_botao_consultar_planilha()
+
+
+def _exibir_json_chamada_api() -> None:
+    """JSON enviado ao BB, recolhido ate o cliente abrir."""
+    chamadas = st.session_state.get("ultimo_chamadas_api") or []
+    if not chamadas:
+        return
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    json_chamada = json.dumps(chamadas, ensure_ascii=False, indent=2, default=str)
+    with st.expander("Ver JSON da chamada", expanded=False):
+        st.caption("Corpo enviado em cada boleto. Nao inclui token nem App Key.")
+        st.code(json_chamada, language="json")
+        st.download_button(
+            "Baixar JSON da chamada",
+            data=json_chamada.encode("utf-8"),
+            file_name=f"chamada_bb_{stamp}.json",
+            mime="application/json",
+            key="btn_json_chamada_api",
+        )
 
 
 def _itens_consulta_planilha() -> list[dict]:
@@ -1867,6 +1887,18 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                 st.session_state.ultimo_api_convenio = "".join(
                     filter(str.isdigit, str(dados_bancarios.get("convenio", "")))
                 )
+                st.session_state.ultimo_chamadas_api = [
+                    {
+                        "nosso_numero": linha.nosso_numero,
+                        "boleto_id": linha.boleto_id,
+                        "instrucao": linha.instrucao,
+                        "http": linha.status_http,
+                        "sucesso": linha.sucesso,
+                        **(linha.chamada or {}),
+                    }
+                    for linha in resultado_api.linhas
+                    if linha.chamada
+                ]
                 st.session_state.ultima_consulta_erros_bb = None
 
                 preview = []

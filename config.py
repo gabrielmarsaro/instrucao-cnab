@@ -1,7 +1,7 @@
 """Constantes e configurações do aplicativo."""
 
 # Versao exibida na sidebar / suporte (bump a cada release publicada)
-APP_VERSION = "2026.10.09c"
+APP_VERSION = "2026.10.09d"
 
 # E-mails que podem usar sandbox/homologacao (desenvolvimento).
 # Pode sobrescrever em secrets: DEV_EMAILS = ["a@x.com", "b@y.com"]

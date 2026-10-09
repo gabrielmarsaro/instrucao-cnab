@@ -144,6 +144,7 @@ class ResultadoLinhaApi:
     instrucao: str = ""
     codigo_bb: str = ""
     providencia: str = ""
+    chamada: dict | None = None
 
     def para_linha_tabela(self) -> dict:
         return {
@@ -956,13 +957,25 @@ def _executar_instrucao_linha(
     boleto_id = _montar_id_boleto(convenio_raw, nn)
     titulo_atualizar = None
     valor_enviado = None
+    chamada: dict | None = None
+
+    def _com_chamada(linha: ResultadoLinhaApi) -> ResultadoLinhaApi:
+        if chamada is not None:
+            linha.chamada = chamada
+        return linha
 
     try:
         if cod == "02":
+            corpo_baixa = {"numeroConvenio": numero_convenio}
+            chamada = {
+                "metodo": "POST",
+                "caminho": f"/boletos/{boleto_id}/baixar",
+                "corpo": corpo_baixa,
+            }
             resp = _request_bb(
                 "POST",
                 f"/boletos/{boleto_id}/baixar",
-                json_body={"numeroConvenio": numero_convenio},
+                json_body=corpo_baixa,
                 client=client,
             )
         elif cod in INSTRUCOES_API_SUPORTADAS - {"02"}:
@@ -1026,6 +1039,11 @@ def _executar_instrucao_linha(
 
             # BB: uma alteracao por PATCH. Se montante diverge em 06/09/10,
             # nao corrige aqui — sinaliza no resultado via aviso embutido na mensagem se falhar.
+            chamada = {
+                "metodo": "PATCH",
+                "caminho": f"/boletos/{boleto_id}",
+                "corpo": corpo,
+            }
             resp = _request_bb(
                 "PATCH", f"/boletos/{boleto_id}", json_body=corpo, client=client
             )
@@ -1042,17 +1060,21 @@ def _executar_instrucao_linha(
             )
     except BbApiError as exc:
         return (
-            _resultado_erro(nn, str(exc), boleto_id=boleto_id, instrucao=cod),
+            _com_chamada(
+                _resultado_erro(nn, str(exc), boleto_id=boleto_id, instrucao=cod)
+            ),
             None,
             None,
         )
     except Exception as exc:
         return (
-            _resultado_erro(
-                nn,
-                f"Erro de comunicacao: {exc}",
-                boleto_id=boleto_id,
-                instrucao=cod,
+            _com_chamada(
+                _resultado_erro(
+                    nn,
+                    f"Erro de comunicacao: {exc}",
+                    boleto_id=boleto_id,
+                    instrucao=cod,
+                )
             ),
             None,
             None,
@@ -1069,13 +1091,15 @@ def _executar_instrucao_linha(
             "cod_instrucao": cod,
         }
         return (
-            ResultadoLinhaApi(
-                nosso_numero=nn,
-                sucesso=True,
-                mensagem="Enviado com sucesso.",
-                status_http=resp.status_code,
-                boleto_id=boleto_id,
-                instrucao=cod,
+            _com_chamada(
+                ResultadoLinhaApi(
+                    nosso_numero=nn,
+                    sucesso=True,
+                    mensagem="Enviado com sucesso.",
+                    status_http=resp.status_code,
+                    boleto_id=boleto_id,
+                    instrucao=cod,
+                )
             ),
             titulo_atualizar,
             valor_enviado,
@@ -1095,14 +1119,16 @@ def _executar_instrucao_linha(
         mensagem_final = mensagem_bb or _extrair_erro_bb(resp)
 
     return (
-        _resultado_erro(
-            nn,
-            mensagem_final,
-            boleto_id=boleto_id,
-            instrucao=cod,
-            status_http=resp.status_code,
-            codigo_bb=codigo_bb,
-            providencia=providencia,
+        _com_chamada(
+            _resultado_erro(
+                nn,
+                mensagem_final,
+                boleto_id=boleto_id,
+                instrucao=cod,
+                status_http=resp.status_code,
+                codigo_bb=codigo_bb,
+                providencia=providencia,
+            )
         ),
         None,
         None,
