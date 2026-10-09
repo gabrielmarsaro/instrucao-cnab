@@ -190,6 +190,13 @@ def _exibir_ficha_consulta_boleto(consulta: ResultadoConsultaBoleto) -> None:
         "Valor atual",
         str(resumo.get("Valor atual") if resumo.get("Valor atual") != "" else "—"),
     )
+    col_pago, col_rec, col_cred = st.columns(3)
+    col_pago.metric(
+        "Valor pago",
+        str(resumo.get("Valor pago") if resumo.get("Valor pago") != "" else "—"),
+    )
+    col_rec.metric("Recebimento", str(resumo.get("Recebimento") or "—"))
+    col_cred.metric("Crédito", str(resumo.get("Crédito") or "—"))
     col4, col5 = st.columns(2)
     col4.write(f"**Pagador:** {resumo.get('Pagador') or '—'}")
     col5.write(f"**CPF:** {resumo.get('CPF') or '—'}")
@@ -302,40 +309,79 @@ def _exibir_resultado_api_tabela():
         key="btn_csv_resultado_api",
     )
 
+    _exibir_botao_consultar_planilha()
+
+
+def _itens_consulta_planilha() -> list[dict]:
+    """Todos os nossos numeros da planilha, com o erro da instrucao quando houver."""
+    nns = st.session_state.get("api_nns_planilha") or []
     erros = st.session_state.get("ultimo_resultado_api_erros") or []
-    convenio = st.session_state.get("ultimo_api_convenio") or ""
-    if erros and convenio:
-        st.caption(
-            f"{len(erros)} boleto(s) com erro — consulte o estado atual no BB "
-            "para ver situacao, vencimento, valor e demais campos."
+    por_nn = {}
+    for erro in erros:
+        chave = limpar_nosso_numero(erro.get("nosso_numero"))
+        if chave:
+            por_nn[chave] = erro
+    itens = []
+    for nn in nns:
+        erro = por_nn.get(limpar_nosso_numero(nn), {})
+        itens.append(
+            {
+                "nosso_numero": nn,
+                "boleto_id": erro.get("boleto_id") or "",
+                "mensagem": erro.get("mensagem") or "",
+                "status_http": erro.get("status_http"),
+                "codigo_bb": erro.get("codigo_bb") or "",
+                "providencia": erro.get("providencia") or "",
+                "instrucao": erro.get("instrucao") or "",
+            }
         )
-        if st.button(
-            "🔍 Consultar erros no BB",
-            use_container_width=True,
-            key="btn_consultar_erros_bb",
-        ):
-            try:
-                if not bb_credenciais_configuradas():
-                    st.error(mensagem_credenciais_bb())
-                else:
-                    prog = st.progress(0, text="Consultando no BB...")
+    return itens
 
-                    def _on_c(feitos, total, nn):
-                        prog.progress(
-                            min(feitos / total if total else 1.0, 1.0),
-                            text=f"Consulta {feitos}/{total} — {nn or '...'}",
-                        )
 
-                    consultas = consultar_boletos_com_erro(
-                        erros, convenio, on_progress=_on_c
+def _exibir_botao_consultar_planilha() -> None:
+    """No erro da API, oferece consulta de todos os nossos numeros da planilha."""
+    feedback = st.session_state.get("feedback_geracao") or {}
+    erros = st.session_state.get("ultimo_resultado_api_erros") or []
+    houve_erro = (not feedback.get("sucesso")) or bool(erros)
+    itens = _itens_consulta_planilha()
+    convenio = st.session_state.get("ultimo_api_convenio") or ""
+    if not houve_erro or not itens:
+        return
+
+    st.caption(
+        f"{len(itens)} nosso(s) numero(s) da planilha. "
+        "A consulta traz o estado atual de todos no BB, nao so das linhas que falharam."
+    )
+    if not convenio:
+        st.warning("Convenio sem numero — nao da para consultar os boletos no BB.")
+        return
+    if st.button(
+        "Consultar nossos números da planilha",
+        use_container_width=True,
+        key="btn_consultar_erros_bb",
+    ):
+        try:
+            if not bb_credenciais_configuradas():
+                st.error(mensagem_credenciais_bb())
+            else:
+                prog = st.progress(0, text="Consultando no BB...")
+
+                def _on_c(feitos, total, nn):
+                    prog.progress(
+                        min(feitos / total if total else 1.0, 1.0),
+                        text=f"Consulta {feitos}/{total} — {nn or '...'}",
                     )
-                    prog.progress(1.0, text="Consulta concluida.")
-                    st.session_state.ultima_consulta_erros_bb = consultas
-                    st.rerun()
-            except BbApiError as exc:
-                st.error(str(exc))
-            except Exception as exc:
-                st.error(f"Falha ao consultar boletos no BB: {exc}")
+
+                consultas = consultar_boletos_com_erro(
+                    itens, convenio, on_progress=_on_c
+                )
+                prog.progress(1.0, text="Consulta concluida.")
+                st.session_state.ultima_consulta_erros_bb = consultas
+                st.rerun()
+        except BbApiError as exc:
+            st.error(str(exc))
+        except Exception as exc:
+            st.error(f"Falha ao consultar boletos no BB: {exc}")
 
 
 def _exibir_feedback_lote(chave: str, label_botao: str = "Ver detalhes de erros e avisos"):
@@ -356,6 +402,11 @@ def _exibir_feedback_lote(chave: str, label_botao: str = "Ver detalhes de erros 
     # Resultado API em tabela (melhor para muitos boletos)
     if chave == "feedback_geracao":
         _exibir_resultado_api_tabela()
+        if st.session_state.get("ultimo_resultado_api_df") is None or (
+            isinstance(st.session_state.get("ultimo_resultado_api_df"), pd.DataFrame)
+            and st.session_state.get("ultimo_resultado_api_df").empty
+        ):
+            _exibir_botao_consultar_planilha()
 
     if correcoes:
         lista = "\n".join(f"- {item}" for item in correcoes)
@@ -1619,12 +1670,31 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
         if enviar_api:
             try:
                 dados_bancarios = dados_conv_sel.to_dict()
+                lotes_atuais = list(st.session_state.lotes)
+                try:
+                    st.session_state.api_nns_planilha = coletar_nosso_numeros_lotes(
+                        lotes_atuais
+                    )
+                except Exception:
+                    st.session_state.api_nns_planilha = []
+                st.session_state.ultimo_api_convenio = "".join(
+                    filter(str.isdigit, str(dados_bancarios.get("convenio", "")))
+                )
                 cnpj_conv = normalizar_cnpj_credencial(str(dados_bancarios.get("cnpj") or ""))
                 creds_cnpj = obter_bb_credenciais(supabase, user_id, cnpj_conv) if cnpj_conv else None
                 ativar_credenciais_bb(creds_cnpj)
                 if not bb_credenciais_configuradas():
-                    st.error(mensagem_credenciais_bb(cnpj_conv or "(sem CNPJ no convenio)"))
-                    return
+                    st.session_state.ultimo_resultado_api_df = None
+                    st.session_state.ultimo_resultado_api_erros = []
+                    st.session_state.feedback_geracao = {
+                        "sucesso": False,
+                        "mensagem": mensagem_credenciais_bb(
+                            cnpj_conv or "(sem CNPJ no convenio)"
+                        ),
+                        "erros": ["Credenciais da API do BB nao configuradas."],
+                        "avisos": [],
+                    }
+                    st.rerun()
                 email_envio = str(
                     getattr(st.session_state.get("user"), "email", "") or ""
                 )
@@ -1634,13 +1704,19 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                     and amb_envio
                     and amb_envio != "producao"
                 ):
-                    st.error(
-                        "Este usuario so pode usar a API em **producao**. "
-                        "Na aba API BB, salve as credenciais de producao deste CNPJ."
-                    )
-                    return
+                    st.session_state.ultimo_resultado_api_df = None
+                    st.session_state.ultimo_resultado_api_erros = []
+                    st.session_state.feedback_geracao = {
+                        "sucesso": False,
+                        "mensagem": (
+                            "Este usuario so pode usar a API em producao. "
+                            "Na aba API BB, salve as credenciais de producao deste CNPJ."
+                        ),
+                        "erros": ["Ambiente da credencial nao e producao."],
+                        "avisos": [],
+                    }
+                    st.rerun()
 
-                lotes_atuais = list(st.session_state.lotes)
                 convenio_id = convenio_id_sel
                 valores_conhecidos: dict[str, float] = {}
                 descricao_ref = ""
@@ -1819,9 +1895,27 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                 st.session_state.feedback_geracao_aberto = False
                 st.rerun()
             except BbApiError as exc:
-                st.error(str(exc))
+                st.session_state.ultimo_resultado_api_df = None
+                st.session_state.ultimo_resultado_api_erros = []
+                st.session_state.feedback_geracao = {
+                    "sucesso": False,
+                    "mensagem": str(exc),
+                    "erros": [str(exc)],
+                    "avisos": [],
+                }
+                st.session_state.feedback_geracao_aberto = False
+                st.rerun()
             except Exception as exc:
-                st.error(f"Erro ao enviar pela API do BB: {traduzir_erro_db(exc)}")
+                st.session_state.ultimo_resultado_api_df = None
+                st.session_state.ultimo_resultado_api_erros = []
+                st.session_state.feedback_geracao = {
+                    "sucesso": False,
+                    "mensagem": f"Erro ao enviar pela API do BB: {traduzir_erro_db(exc)}",
+                    "erros": [traduzir_erro_db(exc)],
+                    "avisos": [],
+                }
+                st.session_state.feedback_geracao_aberto = False
+                st.rerun()
 
     aviso_busca = st.session_state.pop("aviso_busca_valores", None)
     if aviso_busca:

@@ -286,6 +286,9 @@ class ResultadoConsultaBoleto:
                 "Vencimento": "",
                 "Valor original": "",
                 "Valor atual": "",
+                "Valor pago": "",
+                "Recebimento": "",
+                "Crédito": "",
                 "Pagador": "",
                 "CPF": "",
                 "Erro": self._texto_erro(),
@@ -294,6 +297,7 @@ class ResultadoConsultaBoleto:
 
         valor_orig = self._primeiro_valor("valorOriginalTituloCobranca", "valorOriginal")
         valor_atual = self._primeiro_valor("valorAtualTituloCobranca", "valorAtual")
+        valor_pago = self._primeiro_valor("valorPagoSacado", "valorPago")
         return {
             "Nosso Número": self.nosso_numero or "",
             "Situação": self._rotulo_estado(),
@@ -302,6 +306,13 @@ class ResultadoConsultaBoleto:
             ),
             "Valor original": valor_orig if valor_orig != "" else "",
             "Valor atual": valor_atual if valor_atual != "" else "",
+            "Valor pago": valor_pago if valor_pago != "" else "",
+            "Recebimento": self._primeiro_valor(
+                "dataRecebimentoTitulo", "dataRecebimento"
+            ),
+            "Crédito": self._primeiro_valor(
+                "dataCreditoLiquidacao", "dataCredito"
+            ),
             "Pagador": self._primeiro_valor("nomeSacadoCobranca", "nome"),
             "CPF": self._primeiro_valor(
                 "numeroInscricaoSacadoCobranca", "numeroInscricao"
