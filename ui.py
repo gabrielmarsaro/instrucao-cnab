@@ -223,6 +223,58 @@ def _exibir_ficha_consulta_boleto(consulta: ResultadoConsultaBoleto) -> None:
         _tabela_zebra(df_campos, altura_max=420)
 
 
+def _valor_nominal_da_consulta(consulta: ResultadoConsultaBoleto):
+    """Valor atual do titulo no BB; se vier vazio, o valor original."""
+    if not consulta.sucesso:
+        return None
+    valor = consulta._primeiro_valor(
+        "valorAtualTituloCobranca", "valorAtual"
+    )
+    if valor in ("", None):
+        valor = consulta._primeiro_valor(
+            "valorOriginalTituloCobranca", "valorOriginal"
+        )
+    try:
+        valor_f = round(float(valor), 2)
+    except (TypeError, ValueError):
+        return None
+    if valor_f <= 0:
+        return None
+    return valor_f
+
+
+def _gravar_valores_consulta_planilha(consultas: list[ResultadoConsultaBoleto]) -> str:
+    """Atualiza titulos_valores com o valor que o BB devolveu na consulta."""
+    supabase = st.session_state.get("supabase")
+    user_id = str(st.session_state.get("api_consulta_user_id") or "").strip()
+    convenio_id = str(st.session_state.get("api_consulta_convenio_id") or "").strip()
+    if supabase is None or not user_id or not convenio_id:
+        return "Consulta feita, mas a base nao foi atualizada (convenio da sessao ausente)."
+
+    registros = []
+    for consulta in consultas:
+        valor = _valor_nominal_da_consulta(consulta)
+        if valor is None:
+            continue
+        seu = consulta._primeiro_valor(
+            "numeroTituloCedenteCobranca", "numeroTituloBeneficiario"
+        )
+        registros.append(
+            {
+                "nosso_numero": consulta.nosso_numero,
+                "seu_numero": seu or None,
+                "valor_nominal": valor,
+            }
+        )
+    if not registros:
+        return "Nenhum boleto consultado trouxe valor para gravar na base."
+    try:
+        qtd = upsert_titulos_valores(supabase, user_id, convenio_id, registros)
+    except Exception as exc:
+        return f"Consulta feita, mas falhou ao gravar valores: {traduzir_erro_db(exc)}"
+    return f"{qtd} valor(es) atualizado(s) na base com o valor atual do BB."
+
+
 def _exibir_consulta_erros_bb() -> None:
     consultas: list[ResultadoConsultaBoleto] | None = st.session_state.get(
         "ultima_consulta_erros_bb"
@@ -231,6 +283,13 @@ def _exibir_consulta_erros_bb() -> None:
         return
 
     st.subheader("Consulta no BB")
+    aviso_valores = st.session_state.get("aviso_valores_consulta_planilha")
+    if aviso_valores:
+        texto = str(aviso_valores)
+        if texto.startswith("Consulta feita, mas") or texto.startswith("Nenhum boleto"):
+            st.warning(texto)
+        else:
+            st.success(texto)
     ok = sum(1 for c in consultas if c.sucesso)
     st.caption(
         f"{ok} consultado(s) com sucesso, {len(consultas) - ok} falha(s) na consulta."
@@ -377,6 +436,9 @@ def _exibir_botao_consultar_planilha() -> None:
                 )
                 prog.progress(1.0, text="Consulta concluida.")
                 st.session_state.ultima_consulta_erros_bb = consultas
+                st.session_state.aviso_valores_consulta_planilha = (
+                    _gravar_valores_consulta_planilha(consultas)
+                )
                 st.rerun()
         except BbApiError as exc:
             st.error(str(exc))
@@ -1680,6 +1742,8 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                 st.session_state.ultimo_api_convenio = "".join(
                     filter(str.isdigit, str(dados_bancarios.get("convenio", "")))
                 )
+                st.session_state.api_consulta_user_id = user_id
+                st.session_state.api_consulta_convenio_id = convenio_id_sel
                 cnpj_conv = normalizar_cnpj_credencial(str(dados_bancarios.get("cnpj") or ""))
                 creds_cnpj = obter_bb_credenciais(supabase, user_id, cnpj_conv) if cnpj_conv else None
                 ativar_credenciais_bb(creds_cnpj)
