@@ -373,22 +373,36 @@ def _exibir_resultado_api_tabela():
 
 
 def _exibir_json_chamada_api() -> None:
-    """JSON enviado ao BB, recolhido ate o cliente abrir."""
+    """Botao explicito para o cliente abrir o JSON enviado ao BB."""
+    if st.button(
+        "Consultar JSON da chamada",
+        use_container_width=True,
+        key="btn_consultar_json_chamada",
+    ):
+        st.session_state.mostrar_json_chamada_api = True
+
+    if not st.session_state.get("mostrar_json_chamada_api"):
+        return
+
     chamadas = st.session_state.get("ultimo_chamadas_api") or []
     if not chamadas:
+        st.warning(
+            "Este envio nao guardou o JSON da chamada. "
+            "Envie a planilha de novo nesta versao e clique no botao outra vez."
+        )
         return
+
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     json_chamada = json.dumps(chamadas, ensure_ascii=False, indent=2, default=str)
-    with st.expander("Ver JSON da chamada", expanded=False):
-        st.caption("Corpo enviado em cada boleto. Nao inclui token nem App Key.")
-        st.code(json_chamada, language="json")
-        st.download_button(
-            "Baixar JSON da chamada",
-            data=json_chamada.encode("utf-8"),
-            file_name=f"chamada_bb_{stamp}.json",
-            mime="application/json",
-            key="btn_json_chamada_api",
-        )
+    st.caption("Corpo enviado em cada boleto. Nao inclui token nem App Key.")
+    st.code(json_chamada, language="json")
+    st.download_button(
+        "Baixar JSON da chamada",
+        data=json_chamada.encode("utf-8"),
+        file_name=f"chamada_bb_{stamp}.json",
+        mime="application/json",
+        key="btn_json_chamada_api",
+    )
 
 
 def _itens_consulta_planilha() -> list[dict]:
@@ -488,6 +502,7 @@ def _exibir_feedback_lote(chave: str, label_botao: str = "Ver detalhes de erros 
             isinstance(st.session_state.get("ultimo_resultado_api_df"), pd.DataFrame)
             and st.session_state.get("ultimo_resultado_api_df").empty
         ):
+            _exibir_json_chamada_api()
             _exibir_botao_consultar_planilha()
 
     if correcoes:
@@ -1887,6 +1902,7 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                 st.session_state.ultimo_api_convenio = "".join(
                     filter(str.isdigit, str(dados_bancarios.get("convenio", "")))
                 )
+                st.session_state.mostrar_json_chamada_api = False
                 st.session_state.ultimo_chamadas_api = [
                     {
                         "nosso_numero": linha.nosso_numero,
