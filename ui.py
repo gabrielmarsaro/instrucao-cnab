@@ -52,7 +52,6 @@ from config import (
     APP_VERSION,
     FONTE_APP,
     INSTRUCOES_CNAB,
-    MODOS_REFERENCIA_VALORES,
     NAV_API_BB,
     NAV_CLIENTES,
     NAV_CONVENIOS,
@@ -61,8 +60,6 @@ from config import (
     NAV_OPCOES,
     NAV_VALORES,
     PREVIEW_LINHAS,
-    REF_VALORES_ESCOLHER,
-    REF_VALORES_ULTIMA,
     STATUS_REMESSA_ACEITA,
     STATUS_REMESSA_GERADA,
     STATUS_REMESSA_LABELS,
@@ -75,7 +72,6 @@ from config import (
     TITULO_VALORES_NOMINAIS_HTML,
 )
 from db import (
-    MENSAGEM_MIGRATION_004,
     MENSAGEM_MIGRATION_007,
     _erro_coluna_status_ausente,
     aceitar_convite,
@@ -102,23 +98,17 @@ from db import (
     listar_convenios,
     listar_convenios_cached,
     listar_convites_pendentes,
+    buscar_valores_titulos,
     listar_remessas,
-    listar_remessas_com_valores,
-    listar_remessas_por_convenio,
     listar_titulos_valores,
     normalizar_cnpj_credencial,
     obter_arquivo_remessa,
     obter_bb_credenciais,
-    obter_ultima_remessa_com_valores,
-    obter_valores_referencia,
     remover_compartilhamento,
     salvar_bb_credenciais,
-    salvar_remessa,
     salvar_remessa_resiliente,
-    salvar_snapshot_valores_remessa,
     secrets_configurados,
     tabela_compartilhamentos_disponivel,
-    tabela_remessa_valores_disponivel,
     traduzir_erro_db,
     upsert_titulos_valores,
 )
@@ -224,15 +214,15 @@ def _exibir_ficha_consulta_boleto(consulta: ResultadoConsultaBoleto) -> None:
 
 
 def _valor_nominal_da_consulta(consulta: ResultadoConsultaBoleto):
-    """Valor atual do titulo no BB; se vier vazio, o valor original."""
+    """Valor original do titulo no BB; se vier vazio, o valor atual."""
     if not consulta.sucesso:
         return None
     valor = consulta._primeiro_valor(
-        "valorAtualTituloCobranca", "valorAtual"
+        "valorOriginalTituloCobranca", "valorOriginal"
     )
     if valor in ("", None):
         valor = consulta._primeiro_valor(
-            "valorOriginalTituloCobranca", "valorOriginal"
+            "valorAtualTituloCobranca", "valorAtual"
         )
     try:
         valor_f = round(float(valor), 2)
@@ -272,7 +262,19 @@ def _gravar_valores_consulta_planilha(consultas: list[ResultadoConsultaBoleto]) 
         qtd = upsert_titulos_valores(supabase, user_id, convenio_id, registros)
     except Exception as exc:
         return f"Consulta feita, mas falhou ao gravar valores: {traduzir_erro_db(exc)}"
-    return f"{qtd} valor(es) atualizado(s) na base com o valor atual do BB."
+    return f"{qtd} valor(es) original(is) gravado(s) na base com o retorno do BB."
+
+
+def _consultar_e_gravar_valor_original(convenio: str, nosso_numeros: list[str]) -> str:
+    """Consulta no BB os nossos numeros que falharam e grava o valor original."""
+    itens = [{"nosso_numero": nn} for nn in nosso_numeros if nn]
+    if not convenio or not itens:
+        return "Envio com erro, mas nao havia nosso numero para consultar no BB."
+    consultas = consultar_boletos_com_erro(itens, convenio)
+    st.session_state.ultima_consulta_erros_bb = consultas
+    aviso = _gravar_valores_consulta_planilha(consultas)
+    st.session_state.aviso_valores_consulta_planilha = aviso
+    return aviso
 
 
 def _exibir_consulta_erros_bb() -> None:
@@ -1400,67 +1402,6 @@ def _formatar_rotulo_remessa(row) -> str:
     return rotulo
 
 
-def _selecionar_referencia_valores(
-    supabase: Client,
-    user_id: str,
-    convenio_id: str,
-) -> tuple[str, str | None]:
-    with st.expander("Referencia de valores nominais", expanded=False):
-        st.caption(
-            "Se o banco rejeitar uma remessa, escolha de qual geracao usar os valores de face "
-            "enviados antes, para corrigir automaticamente a nova remessa."
-        )
-        modo = st.radio(
-            "Fonte dos valores de face:",
-            MODOS_REFERENCIA_VALORES,
-            key=f"ref_valores_modo_{convenio_id}",
-        )
-        remessa_id: str | None = None
-        precisa_snapshot = modo in (REF_VALORES_ULTIMA, REF_VALORES_ESCOLHER)
-
-        if precisa_snapshot and not tabela_remessa_valores_disponivel(supabase):
-            st.error(MENSAGEM_MIGRATION_004)
-            st.markdown(
-                "1. Abra o [Supabase Dashboard](https://supabase.com/dashboard) → seu projeto\n"
-                "2. **SQL Editor** → **New query**\n"
-                "3. Cole o conteudo de `supabase/migrations/004_remessa_valores.sql`\n"
-                "4. Clique em **Run**\n"
-                "5. Volte aqui e clique em **Atualizar tela**"
-            )
-        elif modo == REF_VALORES_ULTIMA:
-            ultima_id = obter_ultima_remessa_com_valores(supabase, user_id, convenio_id)
-            if ultima_id:
-                df_todas = listar_remessas_por_convenio(supabase, user_id, convenio_id)
-                reg = df_todas[df_todas["id"].astype(str) == ultima_id]
-                if not reg.empty:
-                    st.caption(f"Sera usada: {_formatar_rotulo_remessa(reg.iloc[0])}")
-            else:
-                st.caption("Nenhuma remessa anterior com valores salvos para este convenio.")
-
-        elif modo == REF_VALORES_ESCOLHER:
-            df_rem = listar_remessas_com_valores(supabase, user_id, convenio_id)
-            if df_rem.empty:
-                st.info(
-                    "Nenhuma remessa anterior possui valores salvos. "
-                    "Gere ao menos uma remessa apos executar a migration 004."
-                )
-            else:
-                st.caption(
-                    "Remessas rejeitadas aparecem marcadas com [Rejeitada] — "
-                    "use-as como referencia ao regenerar o arquivo."
-                )
-                rotulos = [_formatar_rotulo_remessa(row) for _, row in df_rem.iterrows()]
-                indice = st.selectbox(
-                    "Remessa de referencia:",
-                    range(len(rotulos)),
-                    format_func=lambda i: rotulos[i],
-                    key=f"ref_remessa_sel_{convenio_id}",
-                )
-                remessa_id = str(df_rem.iloc[indice]["id"])
-
-    return modo, remessa_id
-
-
 def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, df_clientes: pd.DataFrame):
     if df_convenios.empty:
         st.warning(f"Cadastre ao menos um convênio na aba **{ABA_CONVENIOS_TAB}** antes de gerar remessas.")
@@ -1473,8 +1414,9 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
 
     dados_conv_sel = df_convenios[df_convenios["razao_social"] == convenio_sel].iloc[0]
     convenio_id_sel = str(dados_conv_sel.get("id") or "").strip()
-    modo_ref_valores, remessa_ref_id = _selecionar_referencia_valores(
-        supabase, user_id, convenio_id_sel
+    st.caption(
+        "O arquivo usa o valor da planilha. Se o nosso numero ja estiver na base, "
+        "entra o valor gravado. Se a API recusar, o app consulta o BB e grava o valor original."
     )
 
     st.divider()
@@ -1605,29 +1547,24 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
         if gerar_cnab:
             try:
                 dados_bancarios = dados_conv_sel.to_dict()
+                convenio_id = convenio_id_sel
                 try:
                     nsa = contar_remessas_convenio(supabase, user_id, convenio_id) + 1
                 except Exception:
                     nsa = 1
 
                 lotes_atuais = list(st.session_state.lotes)
-                convenio_id = convenio_id_sel
                 valores_conhecidos: dict[str, float] = {}
-                descricao_ref = ""
                 nosso_numeros: list[str] = []
                 try:
                     nosso_numeros = coletar_nosso_numeros_lotes(lotes_atuais)
-                    valores_conhecidos, descricao_ref = obter_valores_referencia(
-                        supabase,
-                        user_id,
-                        convenio_id,
-                        nosso_numeros,
-                        modo_ref_valores,
-                        remessa_ref_id,
+                    valores_conhecidos = buscar_valores_titulos(
+                        supabase, user_id, convenio_id, nosso_numeros
                     )
                 except Exception as exc:
                     st.session_state.aviso_busca_valores = (
-                        f"Nao foi possivel consultar valores de referencia: {exc}"
+                        f"Nao foi possivel ler os valores da base: {exc}. "
+                        "A remessa segue com o valor da planilha."
                     )
 
                 resultado = gerar_remessa(
@@ -1688,20 +1625,6 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                         f"Arquivo gerado, mas falhou ao gravar no historico: {traduzir_erro_db(exc)}"
                     )
 
-                if remessa_id_salva and resultado.valores_enviados:
-                    try:
-                        salvar_snapshot_valores_remessa(
-                            supabase,
-                            user_id,
-                            convenio_id,
-                            remessa_id_salva,
-                            resultado.valores_enviados,
-                        )
-                    except Exception as exc:
-                        avisos_persistencia.append(
-                            f"Snapshot de valores nao gravado: {traduzir_erro_db(exc)}"
-                        )
-
                 if resultado.titulos_atualizar:
                     try:
                         upsert_titulos_valores(
@@ -1725,8 +1648,6 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                 msg_ok = f"Arquivo **{nome_arquivo}** gerado!"
                 correcoes = list(resultado.avisos_correcao)
                 avisos_geracao: list[str] = list(avisos_persistencia)
-                if descricao_ref:
-                    avisos_geracao.append(f"Referencia de valores: {descricao_ref}.")
                 qtd_registrados = sum(
                     1
                     for nn in nosso_numeros
@@ -1734,7 +1655,8 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                 )
                 if qtd_registrados:
                     avisos_geracao.append(
-                        f"{qtd_registrados} título(s) com valor nominal registrado no banco."
+                        f"{qtd_registrados} titulo(s) usaram o valor gravado na base. "
+                        "Os demais ficaram com o valor da planilha."
                     )
                 if resultado.titulos_atualizar:
                     avisos_geracao.append(
@@ -1820,24 +1742,6 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                     st.rerun()
 
                 convenio_id = convenio_id_sel
-                valores_conhecidos: dict[str, float] = {}
-                descricao_ref = ""
-                nosso_numeros: list[str] = []
-                try:
-                    nosso_numeros = coletar_nosso_numeros_lotes(lotes_atuais)
-                    valores_conhecidos, descricao_ref = obter_valores_referencia(
-                        supabase,
-                        user_id,
-                        convenio_id,
-                        nosso_numeros,
-                        modo_ref_valores,
-                        remessa_ref_id,
-                    )
-                except Exception as exc:
-                    st.session_state.aviso_busca_valores = (
-                        f"Nao foi possivel consultar valores de referencia: {exc}"
-                    )
-
                 progress = st.progress(0, text="Enviando via API BB...")
                 status_txt = st.empty()
 
@@ -1855,7 +1759,6 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                 resultado_api = enviar_lotes_api(
                     lotes_atuais,
                     dados_bancarios,
-                    valores_conhecidos=valores_conhecidos,
                     on_progress=_on_prog,
                     pular_nosso_numeros=ja_ok,
                 )
@@ -1867,8 +1770,6 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                     if not linha.sucesso
                 ]
                 avisos_api = list(resultado_api.avisos)
-                if descricao_ref:
-                    avisos_api.append(f"Referencia de valores: {descricao_ref}.")
 
                 if resultado_api.titulos_atualizar:
                     try:
@@ -1921,6 +1822,29 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                     ]
                 st.session_state.ultimo_chamadas_api = chamadas_envio
                 st.session_state.ultima_consulta_erros_bb = None
+                if resultado_api.falhas:
+                    nns_erro = [
+                        limpar_nosso_numero(linha.nosso_numero)
+                        for linha in resultado_api.linhas
+                        if (
+                            not linha.sucesso
+                            and linha.nosso_numero
+                            and not str(linha.mensagem).startswith("Nao reenviado")
+                        )
+                    ]
+                    nns_erro = list(dict.fromkeys(n for n in nns_erro if n))
+                    convenio_consulta = st.session_state.get("ultimo_api_convenio") or ""
+                    try:
+                        status_txt.caption(
+                            "Consultando nossos numeros para gravar o valor original..."
+                        )
+                        avisos_api.append(
+                            _consultar_e_gravar_valor_original(convenio_consulta, nns_erro)
+                        )
+                    except Exception as exc:
+                        avisos_api.append(
+                            f"Nao foi possivel atualizar o valor original: {exc}"
+                        )
 
                 preview = []
                 for l in resultado_api.linhas[:PREVIEW_LINHAS]:
@@ -1950,13 +1874,9 @@ def render_gerador(supabase: Client, user_id: str, df_convenios: pd.DataFrame, d
                             ),
                         },
                     )
-                    if remessa_id_api and resultado_api.valores_enviados:
-                        salvar_snapshot_valores_remessa(
-                            supabase,
-                            user_id,
-                            convenio_id,
-                            remessa_id_api,
-                            resultado_api.valores_enviados,
+                    if not remessa_id_api:
+                        avisos_api.append(
+                            "Envio processado, mas a remessa nao foi gravada no historico."
                         )
                 except Exception as exc:
                     avisos_api.append(
@@ -2158,8 +2078,7 @@ def render_historico(supabase: Client, user_id: str):
     st.divider()
     st.subheader("Atualizar status da remessa")
     st.caption(
-        "Marque como **Rejeitada** quando o banco recusar o arquivo — "
-        "fica mais facil identifica-la ao escolher referencia de valores."
+        "Marque como **Aceita** ou **Rejeitada** conforme o retorno do banco."
     )
 
     if "id" in df_remessas.columns:
@@ -2265,8 +2184,8 @@ def render_valores_nominais(
 ):
     _render_titulo(TITULO_VALORES_NOMINAIS_HTML)
     st.caption(
-        "Valores registrados apos instrucao 47 (alteracao de valor nominal). "
-        "Usados para corrigir automaticamente o montante em novas remessas."
+        "Valor gravado na base. Se o nosso numero nao estiver aqui, a remessa usa o da planilha. "
+        "Quando a API recusa, a consulta grava o valor original devolvido pelo BB."
     )
 
     if df_convenios.empty:
@@ -2291,7 +2210,7 @@ def render_valores_nominais(
     if df_valores.empty:
         st.info(
             "Nenhum valor registrado para este convenio. "
-            "Gere uma remessa com **instrucao 47** para registrar valores nominais."
+            "A remessa usa o valor da planilha ate uma instrucao 47 ou uma consulta apos erro da API gravar o original."
         )
         return
 
